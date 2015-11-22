@@ -25,7 +25,7 @@ func main() {
 		log.SetOutput(os.Stdout)
 	}
 
-	server, err := NewServer(ipAddr)
+	server, err := NewServer(ipAddr, password)
 	if err != nil {
 		log.Fatalln(err)
 	}

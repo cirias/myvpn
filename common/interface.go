@@ -1,7 +1,6 @@
 package common
 
 import (
-	"encoding/binary"
 	"io"
 	"log"
 )
@@ -39,27 +38,15 @@ func (i *Interface) readRoutine() {
 	//}
 	//}()
 	var qb *QueuedBuffer
-	var totalLen int
 	for qb = range i.buffers {
-		n, err := io.ReadAtLeast(i.rw, qb.Buffer, 4)
+		n, err := i.rw.Read(qb.Buffer)
 		if err != nil {
 			//panic(err)
 			i.error <- err
 			qb.Return()
 			return
 		}
-
-		totalLen = int(binary.BigEndian.Uint16(qb.Buffer[2:4]))
-
-		for qb.N = n; qb.N < totalLen; qb.N += n {
-			n, err = i.rw.Read(qb.Buffer[qb.N:])
-			if err != nil {
-				i.error <- err
-				qb.Return()
-				return
-			}
-		}
-		qb.N = totalLen
+		qb.N = n
 
 		log.Printf("read n: %v data: %x\n", qb.N, qb.Buffer[:qb.N])
 		i.Output <- qb

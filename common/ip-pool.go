@@ -6,6 +6,8 @@ import (
 	"net"
 )
 
+var ErrIPPoolFull = errors.New("IPPool is full")
+
 type IPPool struct {
 	Network *net.IPNet
 	exists  []bool
@@ -51,7 +53,7 @@ func (pool *IPPool) GetIP() (ip net.IP, err error) {
 	}
 
 	if identity == len(pool.exists) {
-		err = errors.New("IPPool is full")
+		err = ErrIPPoolFull
 		return
 	}
 	defer func() {

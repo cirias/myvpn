@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/binary"
+	"errors"
 	"github.com/cirias/cvpn/common"
 	"github.com/songgao/water"
-	//"io"
+	"io"
 	"log"
 	"net"
 	//"os"
@@ -13,26 +15,51 @@ type Client struct {
 	serverAddr string
 	Conn       *common.Interface
 	Tun        *common.Interface
+	cipher     *common.Cipher
+	buffers    chan *common.QueuedBuffer
 	error      chan error
 }
 
-func NewClient(addr string) (client *Client, err error) {
+func NewClient(addr, password string) (client *Client, err error) {
+	cipher, err := common.NewCipher(password)
+	if err != nil {
+		return
+	}
+
 	client = &Client{
 		serverAddr: addr,
+		cipher:     cipher,
+		buffers:    common.NewBufferQueue(common.MAXPACKETSIZE),
 		error:      make(chan error),
 	}
 	return
 }
 
 func (client *Client) tun2conn() {
-	for {
-		client.Conn.Input <- (<-client.Tun.Output)
+	var qb *common.QueuedBuffer
+	var cipherQb *common.QueuedBuffer
+	for qb = range client.Tun.Output {
+		// Encrypt
+		cipherQb = <-client.buffers
+		client.cipher.Encrypt(cipherQb.Buffer, qb.Buffer[:qb.N])
+		cipherQb.N = qb.N
+		qb.Return()
+
+		client.Conn.Input <- cipherQb
 	}
 }
 
 func (client *Client) conn2tun() {
-	for {
-		client.Tun.Input <- (<-client.Conn.Output)
+	var qb *common.QueuedBuffer
+	var plainQb *common.QueuedBuffer
+	for qb = range client.Conn.Output {
+		// Decrypt
+		plainQb = <-client.buffers
+		client.cipher.Decrypt(plainQb.Buffer, qb.Buffer[:qb.N])
+		plainQb.N = qb.N
+		qb.Return()
+
+		client.Tun.Input <- plainQb
 	}
 }
 
@@ -50,15 +77,51 @@ func (client *Client) Run() (err error) {
 	}
 	defer conn.Close()
 
-	// Get ip from server
-	buffer := make([]byte, 1522)
-	n, err := conn.Read(buffer)
+	// Step 1: Send encrypt IV and encrypted IV
+	iv, err := client.cipher.InitEncrypt()
 	if err != nil {
 		return
 	}
-	log.Printf("n: %v data: %x\n", n, buffer[:n])
+	buffer := make([]byte, len(iv)*2)
+	copy(buffer, iv)
+	client.cipher.Encrypt(buffer[len(iv):], iv)
+	n, err := conn.Write(buffer)
+	if err != nil {
+		return
+	}
+	log.Printf("step 1: %vbytes writen %v", n, buffer)
 
-	err = common.ConfigureTun(tun, string(buffer[:n]))
+	// Step 2: Read decrypt IV, REP, IP from server
+	buffer = make([]byte, common.IVLEN+2+4+4)
+	_, err = io.ReadFull(conn, buffer)
+	if err != nil {
+		return
+	}
+
+	err = client.cipher.InitDecrypt(buffer[:common.IVLEN])
+	if err != nil {
+		return
+	}
+
+	plaintext := make([]byte, 2+4+4)
+	client.cipher.Decrypt(plaintext, buffer[common.IVLEN:])
+	log.Printf("Step 2: plaintext:\t%v\n", plaintext)
+
+	rep := binary.BigEndian.Uint16(plaintext[:2])
+	switch rep {
+	case 0:
+	default:
+		err = errors.New("Error occured")
+		return
+	}
+
+	addr := net.IPNet{
+		IP:   plaintext[2:6],
+		Mask: plaintext[6:10],
+	}
+
+	//
+	err = common.ConfigureTun(tun, addr.String())
 	if err != nil {
 		return
 	}
