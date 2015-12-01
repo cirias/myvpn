@@ -182,7 +182,6 @@ func (client *Client) Run() (err error) {
 		return
 	}
 
-	glog.Infoln(tcpAddr.IP.String())
 	if err = common.IfUp(tun.Name(), client.internalAddr, tcpAddr.IP.String()); err != nil {
 		return
 	}
@@ -201,6 +200,7 @@ func (client *Client) Run() (err error) {
 
 	//client.Conn = common.NewInterface("conn", conn)
 	client.Tun = common.NewInterface("tun", tun)
+	glog.Infoln("Tun up as", tun.Name())
 
 	done := make(chan struct{})
 	defer close(done)

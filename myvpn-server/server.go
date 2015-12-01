@@ -12,7 +12,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
-	//"os"
+	"os"
+	"os/signal"
 	//"os/exec"
 )
 
@@ -38,6 +39,17 @@ func NewServer(addr, password string) (server *Server, err error) {
 		return
 	}
 	defer common.IfDown(tun.Name(), addr)
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, os.Kill)
+
+		s := <-c
+		glog.Infoln("Got signal:", s)
+		if err = common.IfDown(tun.Name(), addr); err != nil {
+			glog.Fatalln("IfDown", err)
+		}
+		os.Exit(0)
+	}()
 
 	// IPPool
 	ip, ipPool, err := common.NewIPPoolWithCIDR(addr)
@@ -167,7 +179,7 @@ func (server *Server) handle(conn net.Conn) {
 		for plainQb = range client.Output {
 			// Get distination
 			dst = plainQb.Buffer[16:20]
-			glog.V(2).Infoln("dst:", dst)
+			glog.V(2).Infof("-> [%v]\n", dst)
 
 			switch true {
 			case dst.Equal(server.ip):
@@ -236,7 +248,7 @@ func (server *Server) routeRoutine() {
 		}
 
 		dst = rawQb.Buffer[16:20]
-		glog.V(2).Infoln("dst:", dst)
+		glog.V(2).Infof("-> [%v]\n", dst)
 
 		client = server.clients[binary.BigEndian.Uint32(dst)]
 		if client != nil {

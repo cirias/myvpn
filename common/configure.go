@@ -58,19 +58,19 @@ func IfUp(args ...string) (err error) {
 }
 
 func IfDown(args ...string) (err error) {
-	glog.Infoln("getScriptDir")
+	glog.V(4).Infoln("getScriptDir")
 	scriptDir, err := getScriptDir()
 	if err != nil {
 		return
 	}
 
-	glog.Infoln("execScript")
+	glog.V(4).Infoln("execScript")
 	err = execScript(filepath.Join(scriptDir, IFDOWNSCRIPTNAME), args...)
 	if err != nil {
 		return
 	}
 
-	glog.Infoln("filepath.Walk")
+	glog.V(4).Infoln("filepath.Walk")
 	err = filepath.Walk(filepath.Join(scriptDir, IFDOWNCONFD), getWalker(args...))
 	return
 }

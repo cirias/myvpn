@@ -2,13 +2,16 @@ package main
 
 import (
 	"strconv"
+	"time"
 	//"encoding/binary"
-	//"errors"
+	"errors"
 	"github.com/cirias/myvpn/common"
 	"github.com/golang/glog"
 	//"log"
 	"net"
 )
+
+var ErrClientTimeout = errors.New("client timeout")
 
 type Client struct {
 	Cipher  *common.Cipher
@@ -18,6 +21,7 @@ type Client struct {
 	UDPConn *net.UDPConn
 	Input   chan *common.QueuedBuffer
 	Output  chan *common.QueuedBuffer
+	timer   *time.Timer
 }
 
 func NewClient(cipher *common.Cipher, port int, ipNet *net.IPNet) (client *Client, err error) {
@@ -76,6 +80,7 @@ func (client *Client) read(done <-chan struct{}) chan error {
 
 				glog.V(3).Infof("<%v> read n: %v data: %x\n", "client", plainQb.N, plainQb.Buffer[:plainQb.N])
 				client.UDPAddr = raddr
+				client.timer.Reset(clientTimeout)
 				client.Output <- plainQb
 			}
 		}
@@ -121,11 +126,24 @@ func (client *Client) write(done <-chan struct{}) chan error {
 	return errc
 }
 
+func (client *Client) setTimeout(done <-chan struct{}) <-chan error {
+	errc := make(chan error)
+	client.timer = time.AfterFunc(clientTimeout, func() {
+		errc <- ErrClientTimeout
+	})
+	go func() {
+		<-done
+		client.timer.Stop()
+	}()
+	return errc
+}
+
 func (client *Client) Run(done chan struct{}) <-chan error {
 	wec := client.write(done)
 	rec := client.read(done)
+	tec := client.setTimeout(done)
 
-	errc := common.Merge(done, wec, rec)
+	errc := common.Merge(done, wec, rec, tec)
 
 	return errc
 }
