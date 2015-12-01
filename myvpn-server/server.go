@@ -2,16 +2,18 @@ package main
 
 import (
 	"bytes"
+	"github.com/golang/glog"
 	//"fmt"
-	"github.com/cirias/cvpn/common"
+	"github.com/cirias/myvpn/common"
 	"github.com/songgao/water"
 	//"github.com/songgao/water/waterutil"
 	"io"
-	"log"
-	"net"
-	//"os"
+	//"log"
 	"encoding/binary"
 	"errors"
+	"net"
+	//"os"
+	//"os/exec"
 )
 
 var ErrInvalidPassword = errors.New("Invalid password")
@@ -20,9 +22,9 @@ type Server struct {
 	ip        net.IP
 	Interface *common.Interface
 	ipPool    *common.IPPool
+	portPool  *common.PortPool
 	clients   map[uint32]*Client
 	Cipher    *common.Cipher
-	buffers   chan *common.QueuedBuffer
 }
 
 func NewServer(addr, password string) (server *Server, err error) {
@@ -31,7 +33,11 @@ func NewServer(addr, password string) (server *Server, err error) {
 	if err != nil {
 		return
 	}
-	common.ConfigureTun(tun, addr)
+
+	if err = common.IfUp(tun.Name(), addr); err != nil {
+		return
+	}
+	defer common.IfDown(tun.Name(), addr)
 
 	// IPPool
 	ip, ipPool, err := common.NewIPPoolWithCIDR(addr)
@@ -47,10 +53,10 @@ func NewServer(addr, password string) (server *Server, err error) {
 
 	server = &Server{
 		ip:        ip,
-		Interface: common.NewInterface(tun),
+		Interface: common.NewInterface("tun", tun),
 		ipPool:    ipPool,
+		portPool:  common.NewPortPool(61000, 1000),
 		Cipher:    cipher,
-		buffers:   common.NewBufferQueue(common.MAXPACKETSIZE),
 	}
 
 	// Initialize clients
@@ -58,24 +64,17 @@ func NewServer(addr, password string) (server *Server, err error) {
 	return
 }
 
-func (server *Server) handle(conn net.Conn) {
+func (server *Server) handshake(conn net.Conn) (client *Client, err error) {
 	defer func() {
 		conn.Close()
-		// TODO error handle
-		//if err := recover(); err != nil {
-		//switch err {
-		//case ErrInvalidPassword:
-		//case common.ErrIPPoolFull:
-		//default:
-		//}
-		//}
 	}()
+
 	// New client cipher from server cipher
 	cipher := server.Cipher.Copy()
 
 	// Step 1: Read decrypt IV and check password
 	buffer := make([]byte, common.IVLEN*2)
-	_, err := io.ReadFull(conn, buffer)
+	_, err = io.ReadFull(conn, buffer)
 	if err != nil {
 		return
 	}
@@ -91,81 +90,103 @@ func (server *Server) handle(conn net.Conn) {
 		err = ErrInvalidPassword
 		return
 	}
-	log.Printf("Step 1: pass %x\n", buffer)
+	glog.Infoln("handshake step 1 pass")
 
 	// Step 2: Send encrypt IV, REP, IP
-	iv, err := server.Cipher.InitEncrypt()
-	if err != nil {
+	iv := make([]byte, common.IVLEN)
+	if err = cipher.InitEncrypt(iv); err != nil {
 		return
 	}
-	buffer = make([]byte, len(iv)+2+4+4)
+
+	buffer = make([]byte, len(iv)+1+4+4+2)
 	copy(buffer, iv)
 
 	ip, err := server.ipPool.GetIP()
 	if err != nil {
-		return
+		// set REP
+		plaintext = []byte{0x01}
 	}
 
-	client := NewClient(conn, cipher, &net.IPNet{
-		IP:   ip,
-		Mask: server.ipPool.Network.Mask,
-	})
-
-	plaintext = make([]byte, len(iv)+2+4+4)
-	copy(plaintext[len(iv)+2:], client.IPNet.IP)
-	copy(plaintext[len(iv)+2+4:], client.IPNet.Mask)
-	log.Printf("Step 2: plaintext:\t%x\n", plaintext)
-	server.Cipher.Encrypt(buffer[len(iv):], plaintext[len(iv):])
-
-	log.Printf("Step 2: buffer:\t%x\n", buffer)
-	_, err = conn.Write(buffer)
+	port, err := server.portPool.GetPort()
 	if err != nil {
+		// set REP
+		plaintext = []byte{0x02}
+	}
+
+	if len(plaintext) != 1 {
+		client, err = NewClient(cipher, port, &net.IPNet{
+			IP:   ip,
+			Mask: server.ipPool.Network.Mask,
+		})
+		if err != nil {
+			return
+		}
+
+		plaintext = make([]byte, 1+4+4+2)
+		copy(plaintext[1:], client.IPNet.IP)
+		copy(plaintext[1+4:], client.IPNet.Mask)
+
+		buf := new(bytes.Buffer)
+		if err = binary.Write(buf, binary.BigEndian, uint16(port)); err != nil {
+			return
+		}
+		copy(plaintext[1+4+4:], buf.Bytes())
+	}
+
+	cipher.Encrypt(buffer[len(iv):], plaintext)
+
+	_, err = conn.Write(buffer)
+	glog.Infoln("handshake step 2 done")
+	return
+}
+
+func (server *Server) handle(conn net.Conn) {
+	client, err := server.handshake(conn)
+	if err != nil {
+		glog.Errorln("during handshake", err)
 		return
 	}
 
-	log.Printf("client join %v", client.IPNet.IP)
+	glog.Infoln("client join", client.IPNet.IP)
 	server.clients[binary.BigEndian.Uint32(client.IPNet.IP)] = client
 	defer func() {
-		log.Printf("client leave %v", client.IPNet.IP)
+		glog.Infoln("client leave", client.IPNet.IP)
 		delete(server.clients, binary.BigEndian.Uint32(client.IPNet.IP))
+		server.ipPool.ReturnIP(client.IPNet.IP)
+		server.portPool.ReturnPort(client.Port)
 	}()
 
-	go func() {
-		var plainQb *common.QueuedBuffer
-		var cipherQb *common.QueuedBuffer
-		var dst net.IP
-		for {
-			plainQb = <-server.buffers
-			err := client.DecryptPacket(plainQb)
-			if err != nil {
-				return
-			}
+	done := make(chan struct{})
+	defer close(done)
 
+	errc := client.Run(done)
+	go func(client *Client) {
+		var plainQb *common.QueuedBuffer
+		var dst net.IP
+		var target *Client
+		for plainQb = range client.Output {
 			// Get distination
 			dst = plainQb.Buffer[16:20]
-			log.Printf("dst: %s", dst)
+			glog.V(2).Infoln("dst:", dst)
 
 			switch true {
 			case dst.Equal(server.ip):
 				server.Interface.Input <- plainQb
 			case server.ipPool.Network.Contains(dst):
-				cipherQb = <-server.buffers
-				server.Cipher.Encrypt(cipherQb.Buffer, plainQb.Buffer[:plainQb.N])
-				cipherQb.N = plainQb.N
-				plainQb.Return()
-
-				server.clients[binary.BigEndian.Uint32(dst)].Interface.Input <- cipherQb
+				target = server.clients[binary.BigEndian.Uint32(dst)]
+				if target != nil {
+					target.Input <- plainQb
+				} else {
+					glog.Warningln("drop packet")
+				}
 			default:
 				server.Interface.Input <- plainQb
 			}
 		}
-	}()
+	}(client)
 
-	err = client.Interface.Run()
-	if err != nil {
-		log.Println(err)
-		return
-	}
+	err = <-errc
+	glog.Errorln("handle conn", err)
 
 	return
 }
@@ -173,7 +194,7 @@ func (server *Server) handle(conn net.Conn) {
 func (server *Server) rawPacket(rawQb *common.QueuedBuffer) (err error) {
 	var qb *common.QueuedBuffer
 	var ok bool
-	// Decrypt IP packet header
+	// IP packet header
 	for rawQb.N = 0; rawQb.N < 20; {
 		qb, ok = <-server.Interface.Output
 		if !ok {
@@ -189,9 +210,8 @@ func (server *Server) rawPacket(rawQb *common.QueuedBuffer) (err error) {
 	}
 
 	totalLen := int(binary.BigEndian.Uint16(rawQb.Buffer[2:4]))
-	log.Printf("totalLen: %v, rawQb.N: %v\n", totalLen, rawQb.N)
 
-	// Decrypt the rest of the packet
+	// the rest of the packet
 	for rawQb.N < totalLen {
 		qb, ok = <-server.Interface.Output
 		if !ok {
@@ -206,48 +226,41 @@ func (server *Server) rawPacket(rawQb *common.QueuedBuffer) (err error) {
 
 func (server *Server) routeRoutine() {
 	var rawQb *common.QueuedBuffer
-	var cipherQb *common.QueuedBuffer
 	var dst net.IP
 	var client *Client
 	for {
-		rawQb = <-server.buffers
+		rawQb = common.LB.Get()
 		err := server.rawPacket(rawQb)
 		if err != nil {
 			return
 		}
 
 		dst = rawQb.Buffer[16:20]
-		log.Printf("dst: %s\n", dst)
+		glog.V(2).Infoln("dst:", dst)
 
 		client = server.clients[binary.BigEndian.Uint32(dst)]
 		if client != nil {
-			cipherQb = <-server.buffers
-			server.Cipher.Encrypt(cipherQb.Buffer, rawQb.Buffer[:rawQb.N])
-			cipherQb.N = rawQb.N
-			rawQb.Return()
-
-			client.Interface.Input <- cipherQb
+			client.Input <- rawQb
 		} else {
-			log.Printf("Drop packet, dst: [%s]\n", dst)
+			glog.Warningln("drop packet")
 		}
 	}
 }
 
 func (server *Server) Run(laddr string) (err error) {
-	go server.routeRoutine()
-
 	// TCP
 	listener, err := net.Listen("tcp", laddr)
 	if err != nil {
 		return
 	}
 	defer listener.Close()
+	glog.Infoln("listening on", laddr)
 
 	go func() {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
-				log.Fatalln(err)
+				glog.Fatalln("listener", err)
 				return
 			}
 
@@ -266,7 +279,13 @@ func (server *Server) Run(laddr string) (err error) {
 	//}
 	//server.conn = conn
 
-	err = server.Interface.Run()
+	done := make(chan struct{})
+	defer close(done)
+
+	errc := server.Interface.Run(done)
+	go server.routeRoutine()
+
+	err = <-errc
 
 	return
 }

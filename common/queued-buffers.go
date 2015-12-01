@@ -21,11 +21,3 @@ func (qb *QueuedBuffer) Return() {
 		qb.queue <- qb
 	}
 }
-
-func NewBufferQueue(bufferSize int) (bufferQueue chan *QueuedBuffer) {
-	bufferQueue = make(chan *QueuedBuffer, BUFFERQUEUESIZE)
-	for i := 0; i < BUFFERQUEUESIZE; i++ {
-		bufferQueue <- NewQueuedBuffer(bufferQueue, bufferSize)
-	}
-	return
-}

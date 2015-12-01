@@ -83,15 +83,12 @@ func NewCipher(password string) (c *Cipher, err error) {
 }
 
 // Initializes the block cipher with CFB mode, returns IV.
-func (c *Cipher) InitEncrypt() (iv []byte, err error) {
-	iv = make([]byte, IVLEN)
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return nil, err
+func (c *Cipher) InitEncrypt(iv []byte) (err error) {
+	//iv = make([]byte, IVLEN)
+	if _, err = io.ReadFull(rand.Reader, iv); err != nil {
+		return
 	}
 	c.enc, err = newStream(c.key, iv, Encrypt)
-	if err != nil {
-		return nil, err
-	}
 	return
 }
 

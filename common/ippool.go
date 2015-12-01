@@ -6,11 +6,13 @@ import (
 	"net"
 )
 
+var ErrIPPoolEmpty = errors.New("No avaliable ip")
 var ErrIPPoolFull = errors.New("IPPool is full")
 
 type IPPool struct {
 	Network *net.IPNet
 	exists  []bool
+	ips     chan net.IP
 }
 
 func NewIPPool(network *net.IPNet) (pool *IPPool) {
@@ -29,12 +31,31 @@ func NewIPPoolWithCIDR(addr string) (ip net.IP, pool *IPPool, err error) {
 		return
 	}
 
-	pool = NewIPPool(network)
+	pool = &IPPool{
+		Network: network,
+	}
+
+	size := pool.capacity()
+
+	pool.ips = make(chan net.IP, size)
 	id, err := pool.getIdentity(ip)
 	if err != nil {
 		return
 	}
-	pool.exists[id] = true
+
+	for identity := 1; identity <= size; identity++ {
+		if identity == id {
+			continue
+		}
+
+		newIP := make(net.IP, 4)
+		copy(newIP, pool.Network.IP.To4())
+		for i, index := 1, identity; index != 0; i++ {
+			newIP[len(newIP)-i] = newIP[len(newIP)-i] | (byte)(0xFF&index)
+			index = index >> 8
+		}
+		pool.ips <- newIP
+	}
 
 	return
 }
@@ -42,31 +63,6 @@ func NewIPPoolWithCIDR(addr string) (ip net.IP, pool *IPPool, err error) {
 func (pool *IPPool) capacity() int {
 	ones, bits := pool.Network.Mask.Size()
 	return (1 << uint(bits-ones)) - 2
-}
-
-func (pool *IPPool) GetIP() (ip net.IP, err error) {
-	var identity int
-	for identity = 1; identity < len(pool.exists); identity++ {
-		if pool.exists[identity] == false {
-			break
-		}
-	}
-
-	if identity == len(pool.exists) {
-		err = ErrIPPoolFull
-		return
-	}
-	defer func() {
-		pool.exists[identity] = true
-	}()
-
-	ip = net.IPv4(0, 0, 0, 0).To4()
-	copy(ip, pool.Network.IP.To4())
-	for i := 1; identity != 0; i++ {
-		ip[len(ip)-i] = ip[len(ip)-i] | (byte)(0xFF&identity)
-		identity = identity >> 8
-	}
-	return
 }
 
 func (pool *IPPool) getIdentity(ip net.IP) (identity int, err error) {
@@ -84,12 +80,20 @@ func (pool *IPPool) getIdentity(ip net.IP) (identity int, err error) {
 	return
 }
 
-func (pool *IPPool) ReturnIP(ip net.IP) (err error) {
-	identity, err := pool.getIdentity(ip)
-	if err != nil {
-		return
+func (pool *IPPool) GetIP() (ip net.IP, err error) {
+	select {
+	case ip = <-pool.ips:
+	default:
+		err = ErrIPPoolEmpty
 	}
+	return
+}
 
-	pool.exists[identity] = false
+func (pool *IPPool) ReturnIP(ip net.IP) (err error) {
+	select {
+	case pool.ips <- ip:
+	default:
+		err = ErrIPPoolFull
+	}
 	return
 }

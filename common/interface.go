@@ -1,81 +1,115 @@
 package common
 
 import (
+	"github.com/golang/glog"
 	"io"
-	"log"
+	//"log"
+	"sync"
 )
 
 const (
-	MAXPACKETSIZE = 65535
+	MAXPACKETSIZE = 1500
 )
 
 type Interface struct {
-	rw      io.ReadWriter
-	buffers chan *QueuedBuffer
-	Input   chan *QueuedBuffer
-	Output  chan *QueuedBuffer
-	error   chan error
+	name   string
+	rw     io.ReadWriter
+	Input  chan *QueuedBuffer
+	Output chan *QueuedBuffer
 }
 
-func NewInterface(rw io.ReadWriter) *Interface {
+func NewInterface(name string, rw io.ReadWriter) *Interface {
 	return &Interface{
-		rw:      rw,
-		buffers: NewBufferQueue(MAXPACKETSIZE),
-		Input:   make(chan *QueuedBuffer, BUFFERQUEUESIZE),
-		Output:  make(chan *QueuedBuffer, BUFFERQUEUESIZE),
-		error:   make(chan error, 1),
+		name: name,
+		rw:   rw,
 	}
 }
 
-func (i *Interface) readPacket() {
-
-}
-
-func (i *Interface) readRoutine() {
-	//defer func() {
-	//if err := recover(); err != nil {
-	//i.error <- err.(error)
-	//}
-	//}()
+func (i *Interface) read(done <-chan struct{}) chan error {
+	i.Output = make(chan *QueuedBuffer, BUFFERQUEUESIZE)
+	errc := make(chan error)
 	var qb *QueuedBuffer
-	for qb = range i.buffers {
-		n, err := i.rw.Read(qb.Buffer)
-		if err != nil {
-			//panic(err)
-			i.error <- err
-			qb.Return()
-			return
+	go func() {
+		defer close(errc)
+		defer close(i.Output)
+
+		for {
+			qb = LB.Get()
+			select {
+			case <-done:
+				return
+			default:
+				n, err := i.rw.Read(qb.Buffer)
+				qb.N = n
+				if err != nil {
+					qb.Return()
+					errc <- err
+				} else {
+					glog.V(3).Infof("<%v> read n: %v data: %x\n", i.name, qb.N, qb.Buffer[:qb.N])
+					i.Output <- qb
+				}
+			}
 		}
-		qb.N = n
-
-		log.Printf("read n: %v data: %x\n", qb.N, qb.Buffer[:qb.N])
-		i.Output <- qb
-	}
-}
-
-func (i *Interface) writeRoutine() {
-	var qb *QueuedBuffer
-	for qb = range i.Input {
-		n, err := i.rw.Write(qb.Buffer[:qb.N])
-		log.Printf("write n: %v data: %x\n", n, qb.Buffer[:qb.N])
-		qb.Return()
-		if err != nil {
-			i.error <- err
-		}
-	}
-}
-
-func (i *Interface) Run() (err error) {
-	defer func() {
-		//close(i.buffers)
-		close(i.Input)
-		close(i.Output)
 	}()
+	return errc
+}
 
-	go i.readRoutine()
-	go i.writeRoutine()
+func (i *Interface) write(done <-chan struct{}) chan error {
+	i.Input = make(chan *QueuedBuffer, BUFFERQUEUESIZE)
+	errc := make(chan error)
+	var qb *QueuedBuffer
+	go func() {
+		defer close(errc)
+		defer close(i.Input)
 
-	err = <-i.error
+		for qb = range i.Input {
+			n, err := i.rw.Write(qb.Buffer[:qb.N])
+			glog.V(3).Infof("<%v> write n: %v data: %x\n", i.name, n, qb.Buffer[:qb.N])
+			qb.Return()
+			select {
+			case <-done:
+				return
+			default:
+				if err != nil {
+					errc <- err
+				}
+			}
+		}
+	}()
+	return errc
+}
 
-	return
+func Merge(done <-chan struct{}, cs ...<-chan error) <-chan error {
+	var wg sync.WaitGroup
+	out := make(chan error)
+
+	output := func(c <-chan error) {
+		for err := range c {
+			select {
+			case out <- err:
+			case <-done:
+				return
+			}
+		}
+		wg.Done()
+	}
+	wg.Add(len(cs))
+	for _, c := range cs {
+		go output(c)
+	}
+
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+	return out
+}
+
+func (i *Interface) Run(done chan struct{}) <-chan error {
+	wec := i.write(done)
+	rec := i.read(done)
+
+	errc := Merge(done, wec, rec)
+
+	return errc
 }
