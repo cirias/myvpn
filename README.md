@@ -19,6 +19,11 @@
 - [ ] Robust
   - [ ] Integrity (hmac)
 - [ ] Refactor UDP port logic
+- [ ] Dockerize
+
+## Install
+Download the binary on the [release page](https://github.com/cirias/myvpn/releases).
+Extract the archive.
 
 ## Usage
 
@@ -37,7 +42,6 @@ sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 sudo myvpn-client -server-addr=<serverip>:9525 -password=<yourpassword> -logtostderr -v=2
 
 # set as default route
-# replace 10.0.200.1 to your server internal ip
 # replace tun0 to your local interface name
-sudo ip route add default via 10.0.200.1 dev tun0
+sudo ip route add default dev tun0
 ```
