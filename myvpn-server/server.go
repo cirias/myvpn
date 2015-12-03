@@ -81,38 +81,29 @@ func (server *Server) handshake(conn net.Conn) (client *Client, err error) {
 		conn.Close()
 	}()
 
-	// New client cipher from server cipher
-	cipher := server.Cipher.Copy()
-
-	// Step 1: Read decrypt IV and check password
-	buffer := make([]byte, common.IVLEN*2)
-	_, err = io.ReadFull(conn, buffer)
-	if err != nil {
+	// Step 1: Read encrypted IV and random key
+	buffer := make([]byte, common.IV_SIZE*2+common.KEY_SIZE)
+	if _, err = io.ReadFull(conn, buffer); err != nil {
 		return
 	}
 
-	err = cipher.InitDecrypt(buffer[:common.IVLEN])
-	if err != nil {
+	plaintext := make([]byte, common.IV_SIZE+common.KEY_SIZE)
+	if err = server.Cipher.Decrypt(buffer[:common.IV_SIZE], plaintext, buffer[common.IV_SIZE:]); err != nil {
 		return
 	}
-
-	plaintext := make([]byte, common.IVLEN)
-	cipher.Decrypt(plaintext, buffer[common.IVLEN:])
-	if !bytes.Equal(plaintext, buffer[:common.IVLEN]) {
+	if !bytes.Equal(plaintext[:common.IV_SIZE], buffer[:common.IV_SIZE]) {
 		err = ErrInvalidPassword
+		return
+	}
+
+	// New client cipher from server cipher
+	cipher, err := common.NewCipherWithKey(plaintext[common.IV_SIZE:])
+	if err != nil {
 		return
 	}
 	glog.Infoln("handshake step 1 pass")
 
-	// Step 2: Send encrypt IV, REP, IP
-	iv := make([]byte, common.IVLEN)
-	if err = cipher.InitEncrypt(iv); err != nil {
-		return
-	}
-
-	buffer = make([]byte, len(iv)+1+4+4+2)
-	copy(buffer, iv)
-
+	// Step 2: Send REP, IP, IPMask, Port
 	ip, err := server.ipPool.GetIP()
 	if err != nil {
 		// set REP
@@ -145,9 +136,12 @@ func (server *Server) handshake(conn net.Conn) (client *Client, err error) {
 		copy(plaintext[1+4+4:], buf.Bytes())
 	}
 
-	cipher.Encrypt(buffer[len(iv):], plaintext)
+	ciphertext := make([]byte, common.IV_SIZE+1+4+4+2)
+	if err = server.Cipher.Encrypt(ciphertext[:common.IV_SIZE], ciphertext[common.IV_SIZE:], plaintext); err != nil {
+		return
+	}
 
-	_, err = conn.Write(buffer)
+	_, err = conn.Write(ciphertext)
 	glog.Infoln("handshake step 2 done")
 	return
 }

@@ -66,16 +66,14 @@ func (client *Client) read(done <-chan struct{}) chan error {
 					continue
 				}
 
-				err = client.Cipher.InitDecrypt(cipherQb.Buffer[:common.IVLEN])
-				if err != nil {
+				plainQb = common.LB.Get()
+				if err := client.Cipher.Decrypt(cipherQb.Buffer[:common.IV_SIZE], plainQb.Buffer, cipherQb.Buffer[common.IV_SIZE:cipherQb.N]); err != nil {
 					cipherQb.Return()
+					plainQb.Return()
 					errc <- err
 					continue
 				}
-
-				plainQb = common.LB.Get()
-				client.Cipher.Decrypt(plainQb.Buffer, cipherQb.Buffer[common.IVLEN:cipherQb.N])
-				plainQb.N = cipherQb.N - common.IVLEN
+				plainQb.N = cipherQb.N - common.IV_SIZE
 				cipherQb.Return()
 
 				glog.V(3).Infof("<%v> read n: %v data: %x\n", "client", plainQb.N, plainQb.Buffer[:plainQb.N])
@@ -99,15 +97,13 @@ func (client *Client) write(done <-chan struct{}) chan error {
 
 		for plainQb = range client.Input {
 			cipherQb = common.LB.Get()
-
-			if err := client.Cipher.InitEncrypt(cipherQb.Buffer[:common.IVLEN]); err != nil {
-				plainQb.Return()
+			if err := client.Cipher.Encrypt(cipherQb.Buffer[:common.IV_SIZE], cipherQb.Buffer[common.IV_SIZE:], plainQb.Buffer[:plainQb.N]); err != nil {
 				cipherQb.Return()
+				plainQb.Return()
+				glog.Fatalln("client encrypt", err)
 				continue
 			}
-
-			client.Cipher.Encrypt(cipherQb.Buffer[common.IVLEN:], plainQb.Buffer[:plainQb.N])
-			cipherQb.N = common.IVLEN + plainQb.N
+			cipherQb.N = common.IV_SIZE + plainQb.N
 			plainQb.Return()
 
 			n, err := client.UDPConn.WriteToUDP(cipherQb.Buffer[:cipherQb.N], client.UDPAddr)

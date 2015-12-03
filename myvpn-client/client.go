@@ -2,6 +2,7 @@ package main
 
 import (
 	//"fmt"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"github.com/cirias/myvpn/common"
@@ -19,20 +20,16 @@ import (
 type Client struct {
 	serverAddr   string
 	internalAddr string
+	password     string
 	UDPHandle    *UDPHandle
 	Tun          *common.Interface
 	cipher       *common.Cipher
 }
 
 func NewClient(addr, password string) (client *Client, err error) {
-	cipher, err := common.NewCipher(password)
-	if err != nil {
-		return
-	}
-
 	client = &Client{
 		serverAddr: addr,
-		cipher:     cipher,
+		password:   password,
 	}
 	return
 }
@@ -40,36 +37,43 @@ func NewClient(addr, password string) (client *Client, err error) {
 func (client *Client) handshake(conn net.Conn) (err error) {
 	defer conn.Close()
 
-	// Step 1: Send encrypt IV and encrypted IV
-	iv := make([]byte, common.IVLEN)
-	if err = client.cipher.InitEncrypt(iv); err != nil {
+	cipher, err := common.NewCipher(client.password)
+	if err != nil {
 		return
 	}
 
-	buffer := make([]byte, len(iv)*2)
-	copy(buffer, iv)
-	client.cipher.Encrypt(buffer[len(iv):], iv)
+	// Step 1: Send encrypted IV and random key
+	plaintext := make([]byte, common.IV_SIZE+common.KEY_SIZE)
+	if _, err = io.ReadFull(rand.Reader, plaintext[common.IV_SIZE:]); err != nil {
+		return
+	}
 
-	_, err = conn.Write(buffer)
+	client.cipher, err = common.NewCipherWithKey(plaintext[common.IV_SIZE:])
 	if err != nil {
+		return
+	}
+
+	ciphertext := make([]byte, common.IV_SIZE*2+common.KEY_SIZE)
+	if err = cipher.Encrypt(plaintext[:common.IV_SIZE], ciphertext[common.IV_SIZE:], plaintext); err != nil {
+		return
+	}
+	copy(ciphertext[:common.IV_SIZE], plaintext[:common.IV_SIZE])
+
+	if _, err = conn.Write(ciphertext); err != nil {
 		return
 	}
 	glog.Infoln("handshake step 1 done")
 
-	// Step 2: Read decrypt IV, REP, IP, IPMask, UDPPort from server
-	buffer = make([]byte, common.IVLEN+1+4+4+2)
-	_, err = io.ReadFull(conn, buffer)
-	if err != nil {
+	// Step 2: Read REP, IP, IPMask, UDPPort from server
+	ciphertext = make([]byte, common.IV_SIZE+1+4+4+2)
+	if _, err = io.ReadFull(conn, ciphertext); err != nil {
 		return
 	}
 
-	err = client.cipher.InitDecrypt(buffer[:common.IVLEN])
-	if err != nil {
+	plaintext = make([]byte, 1+4+4+2)
+	if err = cipher.Decrypt(ciphertext[:common.IV_SIZE], plaintext, ciphertext[common.IV_SIZE:]); err != nil {
 		return
 	}
-
-	plaintext := make([]byte, 1+4+4+2)
-	client.cipher.Decrypt(plaintext, buffer[common.IVLEN:])
 
 	// REP
 	rep := plaintext[0]
@@ -123,15 +127,14 @@ func (client *Client) tun2conn() {
 		// Encrypt
 		cipherQb = common.LB.Get()
 
-		if err := client.cipher.InitEncrypt(cipherQb.Buffer[:common.IVLEN]); err != nil {
+		if err := client.cipher.Encrypt(cipherQb.Buffer[:common.IV_SIZE], cipherQb.Buffer[common.IV_SIZE:], qb.Buffer[:qb.N]); err != nil {
 			qb.Return()
 			cipherQb.Return()
-			glog.Errorln("InitEncrypt", err)
+			glog.Fatalln("client encrypt", err)
 			continue
 		}
 
-		client.cipher.Encrypt(cipherQb.Buffer[common.IVLEN:], qb.Buffer[:qb.N])
-		cipherQb.N = common.IVLEN + qb.N
+		cipherQb.N = common.IV_SIZE + qb.N
 		qb.Return()
 
 		client.UDPHandle.Input <- cipherQb
@@ -139,21 +142,20 @@ func (client *Client) tun2conn() {
 }
 
 func (client *Client) conn2tun() {
-	var qb *common.QueuedBuffer
+	var cipherQb *common.QueuedBuffer
 	var plainQb *common.QueuedBuffer
-	for qb = range client.UDPHandle.Output {
-		if err := client.cipher.InitDecrypt(qb.Buffer[:common.IVLEN]); err != nil {
-			qb.Return()
-			glog.Errorln("InitDecrypt", err)
-			//errc <- err
+	for cipherQb = range client.UDPHandle.Output {
+		// Decrypt
+		plainQb = common.LB.Get()
+		if err := client.cipher.Decrypt(cipherQb.Buffer[:common.IV_SIZE], plainQb.Buffer, cipherQb.Buffer[common.IV_SIZE:cipherQb.N]); err != nil {
+			cipherQb.Return()
+			plainQb.Return()
+			glog.Fatalln("client decrypt", err)
 			continue
 		}
 
-		// Decrypt
-		plainQb = common.LB.Get()
-		client.cipher.Decrypt(plainQb.Buffer, qb.Buffer[common.IVLEN:qb.N])
-		plainQb.N = qb.N - common.IVLEN
-		qb.Return()
+		plainQb.N = cipherQb.N - common.IV_SIZE
+		cipherQb.Return()
 
 		client.Tun.Input <- plainQb
 	}

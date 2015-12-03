@@ -4,22 +4,23 @@
   - [x] server.go
   - [x] error handle
   - [x] replace `log` to `glog`
-  - [ ] refactor log format
 - [x] Create hook script
   - [x] create `conf.d` for both server and client
   - [x] ip route for server address
   - [x] set mtu
   - [x] Excute script under dir
   - [x] excute if-down when system signal reach
-- [ ] Choose default port
-- [ ] Write documents
 - [x] Change to use UDP
 - [x] Add expire for client
 - [x] Replace ippool and portpool with channel
-- [ ] Robust
-  - [ ] Integrity (hmac)
-- [ ] Refactor UDP port logic
+- [x] Cipher Logic
+- [ ] Rename constants and error code
+- [ ] Merge portpool with ippool
+- [ ] Replace client timer with client collection
+- [ ] Refactor log format
 - [ ] Dockerize
+- [ ] Choose default port
+- [ ] Write documents
 
 ## Install
 Download the binary on the [release page](https://github.com/cirias/myvpn/releases).

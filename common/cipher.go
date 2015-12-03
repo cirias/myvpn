@@ -9,7 +9,8 @@ import (
 	"io"
 )
 
-var errEmptyPassword = errors.New("empty key")
+var ErrEmptyPassword = errors.New("empty password")
+var ErrKeyTooShort = errors.New("key too short")
 
 func md5sum(d []byte) []byte {
 	h := md5.New()
@@ -45,8 +46,8 @@ const (
 )
 
 const (
-	KEYLEN = 32
-	IVLEN  = 16
+	KEY_SIZE = 32
+	IV_SIZE  = 16
 )
 
 func newStream(key, iv []byte, doe DecOrEnc) (c cipher.Stream, err error) {
@@ -63,51 +64,55 @@ func newStream(key, iv []byte, doe DecOrEnc) (c cipher.Stream, err error) {
 }
 
 type Cipher struct {
-	enc cipher.Stream
-	dec cipher.Stream
 	key []byte
 }
 
-// NewCipher creates a cipher that can be used in Dial() etc.
-// Use cipher.Copy() to create a new cipher with the same method and password
-// to avoid the cost of repeated cipher initialization.
 func NewCipher(password string) (c *Cipher, err error) {
 	if password == "" {
-		return nil, errEmptyPassword
+		return nil, ErrEmptyPassword
 	}
 
-	key := evpBytesToKey(password, KEYLEN)
+	key := evpBytesToKey(password, KEY_SIZE)
 
 	c = &Cipher{key: key}
 	return
 }
 
-// Initializes the block cipher with CFB mode, returns IV.
-func (c *Cipher) InitEncrypt(iv []byte) (err error) {
-	//iv = make([]byte, IVLEN)
+func NewCipherWithKey(key []byte) (c *Cipher, err error) {
+	if len(key) < KEY_SIZE {
+		err = ErrKeyTooShort
+		return
+	}
+
+	c = &Cipher{key: key}
+	return
+}
+
+func (c *Cipher) Encrypt(iv, dst, src []byte) (err error) {
 	if _, err = io.ReadFull(rand.Reader, iv); err != nil {
 		return
 	}
-	c.enc, err = newStream(c.key, iv, Encrypt)
+
+	enc, err := newStream(c.key, iv, Encrypt)
+	if err != nil {
+		return
+	}
+
+	enc.XORKeyStream(dst, src)
 	return
 }
 
-func (c *Cipher) InitDecrypt(iv []byte) (err error) {
-	c.dec, err = newStream(c.key, iv, Decrypt)
+func (c *Cipher) Decrypt(iv, dst, src []byte) (err error) {
+	dec, err := newStream(c.key, iv, Decrypt)
+	if err != nil {
+		return
+	}
+
+	dec.XORKeyStream(dst, src)
 	return
-}
-
-func (c *Cipher) Encrypt(dst, src []byte) {
-	c.enc.XORKeyStream(dst, src)
-}
-
-func (c *Cipher) Decrypt(dst, src []byte) {
-	c.dec.XORKeyStream(dst, src)
 }
 
 func (c *Cipher) Copy() *Cipher {
 	nc := *c
-	nc.enc = nil
-	nc.dec = nil
 	return &nc
 }
