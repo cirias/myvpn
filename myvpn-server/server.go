@@ -2,19 +2,15 @@ package main
 
 import (
 	"bytes"
-	"github.com/golang/glog"
-	//"fmt"
-	"github.com/cirias/myvpn/common"
-	"github.com/songgao/water"
-	//"github.com/songgao/water/waterutil"
-	"io"
-	//"log"
 	"encoding/binary"
 	"errors"
+	"github.com/cirias/myvpn/common"
+	"github.com/golang/glog"
+	"github.com/songgao/water"
+	"io"
 	"net"
 	"os"
 	"os/signal"
-	//"os/exec"
 )
 
 var ErrInvalidPassword = errors.New("Invalid password")
@@ -82,22 +78,22 @@ func (server *Server) handshake(conn net.Conn) (client *Client, err error) {
 	}()
 
 	// Step 1: Read encrypted IV and random key
-	buffer := make([]byte, common.IV_SIZE*2+common.KEY_SIZE)
+	buffer := make([]byte, common.IVSize*2+common.KeySize)
 	if _, err = io.ReadFull(conn, buffer); err != nil {
 		return
 	}
 
-	plaintext := make([]byte, common.IV_SIZE+common.KEY_SIZE)
-	if err = server.Cipher.Decrypt(buffer[:common.IV_SIZE], plaintext, buffer[common.IV_SIZE:]); err != nil {
+	plaintext := make([]byte, common.IVSize+common.KeySize)
+	if err = server.Cipher.Decrypt(buffer[:common.IVSize], plaintext, buffer[common.IVSize:]); err != nil {
 		return
 	}
-	if !bytes.Equal(plaintext[:common.IV_SIZE], buffer[:common.IV_SIZE]) {
+	if !bytes.Equal(plaintext[:common.IVSize], buffer[:common.IVSize]) {
 		err = ErrInvalidPassword
 		return
 	}
 
 	// New client cipher from server cipher
-	cipher, err := common.NewCipherWithKey(plaintext[common.IV_SIZE:])
+	cipher, err := common.NewCipherWithKey(plaintext[common.IVSize:])
 	if err != nil {
 		return
 	}
@@ -125,19 +121,19 @@ func (server *Server) handshake(conn net.Conn) (client *Client, err error) {
 			return
 		}
 
-		plaintext = make([]byte, 1+4+4+2)
+		plaintext = make([]byte, 1+common.IPSize+common.IPMaskSize+common.PortSize)
 		copy(plaintext[1:], client.IPNet.IP)
-		copy(plaintext[1+4:], client.IPNet.Mask)
+		copy(plaintext[1+common.IPSize:], client.IPNet.Mask)
 
 		buf := new(bytes.Buffer)
 		if err = binary.Write(buf, binary.BigEndian, uint16(port)); err != nil {
 			return
 		}
-		copy(plaintext[1+4+4:], buf.Bytes())
+		copy(plaintext[1+common.IPSize+common.IPMaskSize:], buf.Bytes())
 	}
 
-	ciphertext := make([]byte, common.IV_SIZE+1+4+4+2)
-	if err = server.Cipher.Encrypt(ciphertext[:common.IV_SIZE], ciphertext[common.IV_SIZE:], plaintext); err != nil {
+	ciphertext := make([]byte, common.IVSize+1+common.IPSize+common.IPMaskSize+common.PortSize)
+	if err = server.Cipher.Encrypt(ciphertext[:common.IVSize], ciphertext[common.IVSize:], plaintext); err != nil {
 		return
 	}
 

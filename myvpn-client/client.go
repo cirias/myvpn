@@ -1,20 +1,16 @@
 package main
 
 import (
-	//"fmt"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"github.com/cirias/myvpn/common"
 	"github.com/golang/glog"
 	"github.com/songgao/water"
-	"github.com/songgao/water/waterutil"
 	"io"
-	//"log"
 	"net"
 	"os"
 	"os/signal"
-	//"os/exec"
 )
 
 type Client struct {
@@ -43,21 +39,21 @@ func (client *Client) handshake(conn net.Conn) (err error) {
 	}
 
 	// Step 1: Send encrypted IV and random key
-	plaintext := make([]byte, common.IV_SIZE+common.KEY_SIZE)
-	if _, err = io.ReadFull(rand.Reader, plaintext[common.IV_SIZE:]); err != nil {
+	plaintext := make([]byte, common.IVSize+common.KeySize)
+	if _, err = io.ReadFull(rand.Reader, plaintext[common.IVSize:]); err != nil {
 		return
 	}
 
-	client.cipher, err = common.NewCipherWithKey(plaintext[common.IV_SIZE:])
+	client.cipher, err = common.NewCipherWithKey(plaintext[common.IVSize:])
 	if err != nil {
 		return
 	}
 
-	ciphertext := make([]byte, common.IV_SIZE*2+common.KEY_SIZE)
-	if err = cipher.Encrypt(plaintext[:common.IV_SIZE], ciphertext[common.IV_SIZE:], plaintext); err != nil {
+	ciphertext := make([]byte, common.IVSize*2+common.KeySize)
+	if err = cipher.Encrypt(plaintext[:common.IVSize], ciphertext[common.IVSize:], plaintext); err != nil {
 		return
 	}
-	copy(ciphertext[:common.IV_SIZE], plaintext[:common.IV_SIZE])
+	copy(ciphertext[:common.IVSize], plaintext[:common.IVSize])
 
 	if _, err = conn.Write(ciphertext); err != nil {
 		return
@@ -65,13 +61,13 @@ func (client *Client) handshake(conn net.Conn) (err error) {
 	glog.Infoln("handshake step 1 done")
 
 	// Step 2: Read REP, IP, IPMask, UDPPort from server
-	ciphertext = make([]byte, common.IV_SIZE+1+4+4+2)
+	ciphertext = make([]byte, common.IVSize+1+common.IPSize+common.IPMaskSize+common.PortSize)
 	if _, err = io.ReadFull(conn, ciphertext); err != nil {
 		return
 	}
 
-	plaintext = make([]byte, 1+4+4+2)
-	if err = cipher.Decrypt(ciphertext[:common.IV_SIZE], plaintext, ciphertext[common.IV_SIZE:]); err != nil {
+	plaintext = make([]byte, 1+common.IPSize+common.IPMaskSize+common.PortSize)
+	if err = cipher.Decrypt(ciphertext[:common.IVSize], plaintext, ciphertext[common.IVSize:]); err != nil {
 		return
 	}
 
@@ -118,23 +114,17 @@ func (client *Client) tun2conn() {
 	var qb *common.QueuedBuffer
 	var cipherQb *common.QueuedBuffer
 	for qb = range client.Tun.Output {
-		// Check is IPv4
-		if !waterutil.IsIPv4(qb.Buffer[:qb.N]) {
-			qb.Return()
-			continue
-		}
-
 		// Encrypt
 		cipherQb = common.LB.Get()
 
-		if err := client.cipher.Encrypt(cipherQb.Buffer[:common.IV_SIZE], cipherQb.Buffer[common.IV_SIZE:], qb.Buffer[:qb.N]); err != nil {
+		if err := client.cipher.Encrypt(cipherQb.Buffer[:common.IVSize], cipherQb.Buffer[common.IVSize:], qb.Buffer[:qb.N]); err != nil {
 			qb.Return()
 			cipherQb.Return()
 			glog.Fatalln("client encrypt", err)
 			continue
 		}
 
-		cipherQb.N = common.IV_SIZE + qb.N
+		cipherQb.N = common.IVSize + qb.N
 		qb.Return()
 
 		client.UDPHandle.Input <- cipherQb
@@ -147,14 +137,14 @@ func (client *Client) conn2tun() {
 	for cipherQb = range client.UDPHandle.Output {
 		// Decrypt
 		plainQb = common.LB.Get()
-		if err := client.cipher.Decrypt(cipherQb.Buffer[:common.IV_SIZE], plainQb.Buffer, cipherQb.Buffer[common.IV_SIZE:cipherQb.N]); err != nil {
+		if err := client.cipher.Decrypt(cipherQb.Buffer[:common.IVSize], plainQb.Buffer, cipherQb.Buffer[common.IVSize:cipherQb.N]); err != nil {
 			cipherQb.Return()
 			plainQb.Return()
 			glog.Fatalln("client decrypt", err)
 			continue
 		}
 
-		plainQb.N = cipherQb.N - common.IV_SIZE
+		plainQb.N = cipherQb.N - common.IVSize
 		cipherQb.Return()
 
 		client.Tun.Input <- plainQb

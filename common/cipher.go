@@ -38,19 +38,17 @@ func evpBytesToKey(password string, keyLen int) (key []byte) {
 	return m[:keyLen]
 }
 
-type DecOrEnc int
-
 const (
-	Decrypt DecOrEnc = iota
+	Decrypt = iota
 	Encrypt
 )
 
 const (
-	KEY_SIZE = 32
-	IV_SIZE  = 16
+	KeySize = 32
+	IVSize  = 16
 )
 
-func newStream(key, iv []byte, doe DecOrEnc) (c cipher.Stream, err error) {
+func newStream(key, iv []byte, doe int) (c cipher.Stream, err error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return
@@ -72,14 +70,14 @@ func NewCipher(password string) (c *Cipher, err error) {
 		return nil, ErrEmptyPassword
 	}
 
-	key := evpBytesToKey(password, KEY_SIZE)
+	key := evpBytesToKey(password, KeySize)
 
 	c = &Cipher{key: key}
 	return
 }
 
 func NewCipherWithKey(key []byte) (c *Cipher, err error) {
-	if len(key) < KEY_SIZE {
+	if len(key) < KeySize {
 		err = ErrKeyTooShort
 		return
 	}

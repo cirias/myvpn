@@ -13,8 +13,8 @@
 - [x] Change to use UDP
 - [x] Add expire for client
 - [x] Replace ippool and portpool with channel
-- [x] Cipher Logic
-- [ ] Rename constants and error code
+- [x] Use random key for each client
+- [x] Rename constants and error code
 - [ ] Merge portpool with ippool
 - [ ] Replace client timer with client collection
 - [ ] Refactor log format

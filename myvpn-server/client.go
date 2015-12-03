@@ -1,14 +1,12 @@
 package main
 
 import (
-	"strconv"
-	"time"
-	//"encoding/binary"
 	"errors"
 	"github.com/cirias/myvpn/common"
 	"github.com/golang/glog"
-	//"log"
 	"net"
+	"strconv"
+	"time"
 )
 
 var ErrClientTimeout = errors.New("client timeout")
@@ -67,13 +65,13 @@ func (client *Client) read(done <-chan struct{}) chan error {
 				}
 
 				plainQb = common.LB.Get()
-				if err := client.Cipher.Decrypt(cipherQb.Buffer[:common.IV_SIZE], plainQb.Buffer, cipherQb.Buffer[common.IV_SIZE:cipherQb.N]); err != nil {
+				if err := client.Cipher.Decrypt(cipherQb.Buffer[:common.IVSize], plainQb.Buffer, cipherQb.Buffer[common.IVSize:cipherQb.N]); err != nil {
 					cipherQb.Return()
 					plainQb.Return()
 					errc <- err
 					continue
 				}
-				plainQb.N = cipherQb.N - common.IV_SIZE
+				plainQb.N = cipherQb.N - common.IVSize
 				cipherQb.Return()
 
 				glog.V(3).Infof("<%v> read n: %v data: %x\n", "client", plainQb.N, plainQb.Buffer[:plainQb.N])
@@ -97,13 +95,13 @@ func (client *Client) write(done <-chan struct{}) chan error {
 
 		for plainQb = range client.Input {
 			cipherQb = common.LB.Get()
-			if err := client.Cipher.Encrypt(cipherQb.Buffer[:common.IV_SIZE], cipherQb.Buffer[common.IV_SIZE:], plainQb.Buffer[:plainQb.N]); err != nil {
+			if err := client.Cipher.Encrypt(cipherQb.Buffer[:common.IVSize], cipherQb.Buffer[common.IVSize:], plainQb.Buffer[:plainQb.N]); err != nil {
 				cipherQb.Return()
 				plainQb.Return()
 				glog.Fatalln("client encrypt", err)
 				continue
 			}
-			cipherQb.N = common.IV_SIZE + plainQb.N
+			cipherQb.N = common.IVSize + plainQb.N
 			plainQb.Return()
 
 			n, err := client.UDPConn.WriteToUDP(cipherQb.Buffer[:cipherQb.N], client.UDPAddr)
