@@ -3,28 +3,21 @@ package main
 import (
 	"flag"
 	"github.com/golang/glog"
-	"time"
 )
 
-var clientTimeout time.Duration
-
 func main() {
-	var ipAddr, listenAddr, password, timeout string
+	var ipAddr, listenAddr, password string
+	var portBase int
 
 	flag.StringVar(&ipAddr, "ip-addr", "10.0.200.1/24", "server internal ip")
 	flag.StringVar(&listenAddr, "listen-addr", "0.0.0.0:9525", "listening address")
 	flag.StringVar(&password, "password", "", "password")
-	flag.StringVar(&timeout, "timeout", "12h", "client timeout")
+	flag.IntVar(&portBase, "port-base", 61000, "base of the port pool")
 	flag.Parse()
 
 	var err error
 
-	clientTimeout, err = time.ParseDuration(timeout)
-	if err != nil {
-		glog.Fatalln(err)
-	}
-
-	server, err := NewServer(ipAddr, password)
+	server, err := NewServer(ipAddr, password, portBase)
 	if err != nil {
 		glog.Fatalln(err)
 	}

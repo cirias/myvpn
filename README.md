@@ -16,11 +16,12 @@
 - [x] Use random key for each client
 - [x] Rename constants and error code
 - [ ] Merge portpool with ippool
-- [ ] Replace client timer with client collection
+- [x] Replace client timer with client collection
 - [ ] Refactor log format
 - [ ] Dockerize
 - [ ] Choose default port
 - [ ] Write documents
+- [ ] Systemd service
 
 ## Install
 Download the binary on the [release page](https://github.com/cirias/myvpn/releases).

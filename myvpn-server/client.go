@@ -12,14 +12,15 @@ import (
 var ErrClientTimeout = errors.New("client timeout")
 
 type Client struct {
-	Cipher  *common.Cipher
-	Port    int
-	UDPAddr *net.UDPAddr
-	IPNet   *net.IPNet
-	UDPConn *net.UDPConn
-	Input   chan *common.QueuedBuffer
-	Output  chan *common.QueuedBuffer
-	timer   *time.Timer
+	Cipher         *common.Cipher
+	Port           int
+	UDPAddr        *net.UDPAddr
+	IPNet          *net.IPNet
+	UDPConn        *net.UDPConn
+	Input          chan *common.QueuedBuffer
+	Output         chan *common.QueuedBuffer
+	LastActiveTime time.Time
+	Quit           chan error
 }
 
 func NewClient(cipher *common.Cipher, port int, ipNet *net.IPNet) (client *Client, err error) {
@@ -41,7 +42,7 @@ func NewClient(cipher *common.Cipher, port int, ipNet *net.IPNet) (client *Clien
 	return
 }
 
-func (client *Client) read(done <-chan struct{}) chan error {
+func (client *Client) read(done <-chan struct{}) <-chan error {
 	client.Output = make(chan *common.QueuedBuffer)
 	errc := make(chan error)
 	var cipherQb *common.QueuedBuffer
@@ -76,7 +77,7 @@ func (client *Client) read(done <-chan struct{}) chan error {
 
 				glog.V(3).Infof("<%v> read n: %v data: %x\n", "client", plainQb.N, plainQb.Buffer[:plainQb.N])
 				client.UDPAddr = raddr
-				client.timer.Reset(clientTimeout)
+				client.LastActiveTime = time.Now()
 				client.Output <- plainQb
 			}
 		}
@@ -84,7 +85,7 @@ func (client *Client) read(done <-chan struct{}) chan error {
 	return errc
 }
 
-func (client *Client) write(done <-chan struct{}) chan error {
+func (client *Client) write(done <-chan struct{}) <-chan error {
 	client.Input = make(chan *common.QueuedBuffer)
 	errc := make(chan error)
 	var plainQb *common.QueuedBuffer
@@ -120,24 +121,17 @@ func (client *Client) write(done <-chan struct{}) chan error {
 	return errc
 }
 
-func (client *Client) setTimeout(done <-chan struct{}) <-chan error {
-	errc := make(chan error)
-	client.timer = time.AfterFunc(clientTimeout, func() {
-		errc <- ErrClientTimeout
-	})
-	go func() {
-		<-done
-		client.timer.Stop()
-	}()
-	return errc
-}
-
-func (client *Client) Run(done chan struct{}) <-chan error {
+func (client *Client) Run(done <-chan struct{}) <-chan error {
 	wec := client.write(done)
 	rec := client.read(done)
-	tec := client.setTimeout(done)
 
-	errc := common.Merge(done, wec, rec, tec)
+	client.Quit = make(chan error)
+	go func(done <-chan struct{}) {
+		defer close(client.Quit)
+		<-done
+	}(done)
+
+	errc := common.Merge(done, wec, rec, client.Quit)
 
 	return errc
 }

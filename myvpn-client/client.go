@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/rand"
 	"encoding/binary"
-	"errors"
 	"github.com/cirias/myvpn/common"
 	"github.com/golang/glog"
 	"github.com/songgao/water"
@@ -61,40 +60,25 @@ func (client *Client) handshake(conn net.Conn) (err error) {
 	glog.Infoln("handshake step 1 done")
 
 	// Step 2: Read REP, IP, IPMask, UDPPort from server
-	ciphertext = make([]byte, common.IVSize+1+common.IPSize+common.IPMaskSize+common.PortSize)
+	ciphertext = make([]byte, common.IVSize+common.IPSize+common.IPMaskSize+common.PortSize)
 	if _, err = io.ReadFull(conn, ciphertext); err != nil {
 		return
 	}
 
-	plaintext = make([]byte, 1+common.IPSize+common.IPMaskSize+common.PortSize)
+	plaintext = make([]byte, common.IPSize+common.IPMaskSize+common.PortSize)
 	if err = cipher.Decrypt(ciphertext[:common.IVSize], plaintext, ciphertext[common.IVSize:]); err != nil {
-		return
-	}
-
-	// REP
-	rep := plaintext[0]
-	switch rep {
-	case 0x00:
-	case 0x01:
-		err = common.ErrIPPoolEmpty
-		return
-	case 0x02:
-		err = common.ErrPortPoolEmpty
-		return
-	default:
-		err = errors.New("Error occured")
 		return
 	}
 
 	// IP and IPMask
 	addr := &net.IPNet{
-		IP:   plaintext[1:5],
-		Mask: plaintext[5:9],
+		IP:   plaintext[:common.IPSize],
+		Mask: plaintext[common.IPSize : common.IPSize+common.IPMaskSize],
 	}
 	client.internalAddr = addr.String()
 
 	// UDPPort
-	port := int(binary.BigEndian.Uint16(plaintext[9:11]))
+	port := int(binary.BigEndian.Uint16(plaintext[common.IPSize+common.IPMaskSize : common.IPSize+common.IPMaskSize+common.PortSize]))
 	udpAddr, err := net.ResolveUDPAddr("udp", client.serverAddr)
 	if err != nil {
 		return

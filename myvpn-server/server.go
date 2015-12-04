@@ -11,20 +11,24 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 )
 
 var ErrInvalidPassword = errors.New("Invalid password")
+var ErrClientCollected = errors.New("Client collected")
 
 type Server struct {
+	portBase  int
 	ip        net.IP
-	Interface *common.Interface
-	ipPool    *common.IPPool
-	portPool  *common.PortPool
+	network   *net.IPNet
+	ipPool    IPPool
+	mutex     sync.Mutex
 	clients   map[uint32]*Client
 	Cipher    *common.Cipher
+	Interface *common.Interface
 }
 
-func NewServer(addr, password string) (server *Server, err error) {
+func NewServer(addr, password string, portBase int) (server *Server, err error) {
 	// Open tun
 	tun, err := water.NewTUN("")
 	if err != nil {
@@ -47,8 +51,13 @@ func NewServer(addr, password string) (server *Server, err error) {
 		os.Exit(0)
 	}()
 
+	ip, network, err := net.ParseCIDR(addr)
+	if err != nil {
+		return
+	}
+
 	// IPPool
-	ip, ipPool, err := common.NewIPPoolWithCIDR(addr)
+	ipPool, err := NewIPPool(ip, network)
 	if err != nil {
 		return
 	}
@@ -60,11 +69,12 @@ func NewServer(addr, password string) (server *Server, err error) {
 	}
 
 	server = &Server{
+		portBase:  portBase,
 		ip:        ip,
-		Interface: common.NewInterface("tun", tun),
+		network:   network,
 		ipPool:    ipPool,
-		portPool:  common.NewPortPool(61000, 1000),
 		Cipher:    cipher,
+		Interface: common.NewInterface("tun", tun),
 	}
 
 	// Initialize clients
@@ -72,10 +82,26 @@ func NewServer(addr, password string) (server *Server, err error) {
 	return
 }
 
+func (server *Server) clientCollection() {
+	var client *Client
+	for _, c := range server.clients {
+		if client == nil {
+			client = c
+			continue
+		}
+
+		if c.LastActiveTime.Before(client.LastActiveTime) {
+			client = c
+		}
+	}
+
+	if client != nil {
+		client.Quit <- ErrClientCollected
+	}
+}
+
 func (server *Server) handshake(conn net.Conn) (client *Client, err error) {
-	defer func() {
-		conn.Close()
-	}()
+	defer conn.Close()
 
 	// Step 1: Read encrypted IV and random key
 	buffer := make([]byte, common.IVSize*2+common.KeySize)
@@ -100,39 +126,41 @@ func (server *Server) handshake(conn net.Conn) (client *Client, err error) {
 	glog.Infoln("handshake step 1 pass")
 
 	// Step 2: Send REP, IP, IPMask, Port
-	ip, err := server.ipPool.GetIP()
-	if err != nil {
-		// set REP
-		plaintext = []byte{0x01}
-	}
-
-	port, err := server.portPool.GetPort()
-	if err != nil {
-		// set REP
-		plaintext = []byte{0x02}
-	}
-
-	if len(plaintext) != 1 {
-		client, err = NewClient(cipher, port, &net.IPNet{
-			IP:   ip,
-			Mask: server.ipPool.Network.Mask,
-		})
-		if err != nil {
-			return
+	var once sync.Once
+	var ip net.IP
+	server.mutex.Lock() // Make sure only one goroutine is poping an ip
+PopingIP:
+	for {
+		select {
+		case ip = <-server.ipPool:
+			break PopingIP
+		default:
+			once.Do(server.clientCollection)
 		}
+	}
+	server.mutex.Unlock()
 
-		plaintext = make([]byte, 1+common.IPSize+common.IPMaskSize+common.PortSize)
-		copy(plaintext[1:], client.IPNet.IP)
-		copy(plaintext[1+common.IPSize:], client.IPNet.Mask)
+	port := IPMapPort(ip, server.network, server.portBase)
 
-		buf := new(bytes.Buffer)
-		if err = binary.Write(buf, binary.BigEndian, uint16(port)); err != nil {
-			return
-		}
-		copy(plaintext[1+common.IPSize+common.IPMaskSize:], buf.Bytes())
+	client, err = NewClient(cipher, port, &net.IPNet{
+		IP:   ip,
+		Mask: server.network.Mask,
+	})
+	if err != nil {
+		return
 	}
 
-	ciphertext := make([]byte, common.IVSize+1+common.IPSize+common.IPMaskSize+common.PortSize)
+	plaintext = make([]byte, common.IPSize+common.IPMaskSize+common.PortSize)
+	copy(plaintext, client.IPNet.IP)
+	copy(plaintext[common.IPSize:], client.IPNet.Mask)
+
+	buf := new(bytes.Buffer)
+	if err = binary.Write(buf, binary.BigEndian, uint16(port)); err != nil {
+		return
+	}
+	copy(plaintext[common.IPSize+common.IPMaskSize:], buf.Bytes())
+
+	ciphertext := make([]byte, common.IVSize+common.IPSize+common.IPMaskSize+common.PortSize)
 	if err = server.Cipher.Encrypt(ciphertext[:common.IVSize], ciphertext[common.IVSize:], plaintext); err != nil {
 		return
 	}
@@ -154,8 +182,7 @@ func (server *Server) handle(conn net.Conn) {
 	defer func() {
 		glog.Infoln("client leave", client.IPNet.IP)
 		delete(server.clients, binary.BigEndian.Uint32(client.IPNet.IP))
-		server.ipPool.ReturnIP(client.IPNet.IP)
-		server.portPool.ReturnPort(client.Port)
+		server.ipPool <- client.IPNet.IP
 	}()
 
 	done := make(chan struct{})
@@ -174,7 +201,7 @@ func (server *Server) handle(conn net.Conn) {
 			switch true {
 			case dst.Equal(server.ip):
 				server.Interface.Input <- plainQb
-			case server.ipPool.Network.Contains(dst):
+			case server.network.Contains(dst):
 				target = server.clients[binary.BigEndian.Uint32(dst)]
 				if target != nil {
 					target.Input <- plainQb
@@ -187,8 +214,16 @@ func (server *Server) handle(conn net.Conn) {
 		}
 	}(client)
 
-	err = <-errc
-	glog.Errorln("handle conn", err)
+HandleError:
+	for err = range errc {
+		glog.Errorln("handle conn", err)
+		switch err {
+		case ErrClientCollected:
+			break HandleError
+		default:
+			break HandleError
+		}
+	}
 
 	return
 }
@@ -269,17 +304,6 @@ func (server *Server) Run(laddr string) (err error) {
 			go server.handle(conn)
 		}
 	}()
-
-	// UDP
-	//udpAddr, err := net.ResolveUDPAddr("udp", laddr)
-	//if err != nil {
-	//return
-	//}
-	//conn, err := net.ListenUDP("udp", udpAddr)
-	//if err != nil {
-	//return
-	//}
-	//server.conn = conn
 
 	done := make(chan struct{})
 	defer close(done)
