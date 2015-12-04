@@ -17,11 +17,13 @@ func main() {
 
 	var err error
 
+	glog.V(4).Infoln("NewServer")
 	server, err := NewServer(ipAddr, password, portBase)
 	if err != nil {
 		glog.Fatalln(err)
 	}
 
+	glog.V(4).Infoln("server.Run")
 	if err = server.Run(listenAddr); err != nil {
 		glog.Fatalln(err)
 	}

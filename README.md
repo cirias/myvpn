@@ -15,9 +15,10 @@
 - [x] Replace ippool and portpool with channel
 - [x] Use random key for each client
 - [x] Rename constants and error code
-- [ ] Merge portpool with ippool
+- [x] Merge portpool with ippool
 - [x] Replace client timer with client collection
-- [ ] Refactor log format
+- [x] Handle tun error `invalid argument`
+- [x] Refactor log format
 - [ ] Dockerize
 - [ ] Choose default port
 - [ ] Write documents
@@ -46,4 +47,56 @@ sudo myvpn-client -server-addr=<serverip>:9525 -password=<yourpassword> -logtost
 # set as default route
 # replace tun0 to your local interface name
 sudo ip route add default dev tun0
+```
+
+## Tech
+The VPN include two parts. First, client handshake with server.
+After handshake success, communication start.
+
+### Handshake
+Handshake start by client creating `TCP` connection to server.
+Then client generate a random key used as the key of `aes`.
+Client send the random key to server. The random key should be
+encrypt with pre-shared password.
+
+```
++----------------------+
+|    |  Encrypted Data |
+| IV |-----------------|
+|    | IV | random key |
+|----+----+------------|
+| 16 | 16 |     32     |
++----------------------+
+```
+
+If the password valid, server will send back the data.
+
+```
++----------------------------+
+|    |     Encrypted Data    |
+| IV |-----------------------|
+|    | IP | IPMask | UDPPort |
+|----+----+--------+---------|
+| 16 |  4 |    4   |    2    |
++----------------------------+
+```
+
+- **IP** is the internal IP of client allocated by server.
+- **IPMask** is the mask of the IP above.
+- **UDPPort** is the udp port of server which the communication
+  packets should be send to.
+
+### Communication
+1. Encrypt packets from TUN and send them to server with UDP
+2. Recieve and decrypt packets from UDP and send to TUN
+Both packets are look like this:
+
+```
++----------------------+
+|    |  Encrypted Data |
+| IV |-----------------|
+|    |     Playload    |
+|----+-----------------|
+| 16 |     variable    |
++----------------------+
 ```

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 )
 
 type Client struct {
@@ -53,6 +54,7 @@ func (client *Client) handshake(conn net.Conn) (err error) {
 		return
 	}
 	copy(ciphertext[:common.IVSize], plaintext[:common.IVSize])
+	glog.V(3).Infof("write %vbytes to [%v]: %x\n", len(plaintext), conn.RemoteAddr(), plaintext)
 
 	if _, err = conn.Write(ciphertext); err != nil {
 		return
@@ -69,6 +71,7 @@ func (client *Client) handshake(conn net.Conn) (err error) {
 	if err = cipher.Decrypt(ciphertext[:common.IVSize], plaintext, ciphertext[common.IVSize:]); err != nil {
 		return
 	}
+	glog.V(3).Infof("read %vbytes from [%v]: %x\n", len(plaintext), conn.RemoteAddr(), plaintext)
 
 	// IP and IPMask
 	addr := &net.IPNet{
@@ -188,6 +191,15 @@ func (client *Client) Run() (err error) {
 	go client.tun2conn()
 	go client.conn2tun()
 
-	err = <-errc
+HandleError:
+	for err = range errc {
+		switch {
+		case strings.Contains(err.Error(), "tun: invalid argument"):
+			glog.Errorln(err)
+		default:
+			break HandleError
+		}
+	}
+
 	return
 }

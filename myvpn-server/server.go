@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 )
 
@@ -113,6 +114,8 @@ func (server *Server) handshake(conn net.Conn) (client *Client, err error) {
 	if err = server.Cipher.Decrypt(buffer[:common.IVSize], plaintext, buffer[common.IVSize:]); err != nil {
 		return
 	}
+	glog.V(3).Infof("read %vbytes from [%v]: %x\n", len(plaintext), conn.RemoteAddr(), plaintext)
+
 	if !bytes.Equal(plaintext[:common.IVSize], buffer[:common.IVSize]) {
 		err = ErrInvalidPassword
 		return
@@ -123,7 +126,7 @@ func (server *Server) handshake(conn net.Conn) (client *Client, err error) {
 	if err != nil {
 		return
 	}
-	glog.Infoln("handshake step 1 pass")
+	glog.Infoln("handshake step 1 done")
 
 	// Step 2: Send REP, IP, IPMask, Port
 	var once sync.Once
@@ -159,6 +162,7 @@ PopingIP:
 		return
 	}
 	copy(plaintext[common.IPSize+common.IPMaskSize:], buf.Bytes())
+	glog.V(3).Infof("write %vbytes to [%v]: %x\n", len(plaintext), conn.RemoteAddr(), plaintext)
 
 	ciphertext := make([]byte, common.IVSize+common.IPSize+common.IPMaskSize+common.PortSize)
 	if err = server.Cipher.Encrypt(ciphertext[:common.IVSize], ciphertext[common.IVSize:], plaintext); err != nil {
@@ -297,7 +301,7 @@ func (server *Server) Run(laddr string) (err error) {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
-				glog.Fatalln("listener", err)
+				glog.Fatalln("listener.Accept", err)
 				return
 			}
 
@@ -311,7 +315,15 @@ func (server *Server) Run(laddr string) (err error) {
 	errc := server.Interface.Run(done)
 	go server.routeRoutine()
 
-	err = <-errc
+HandleInterfaceError:
+	for err = range errc {
+		switch {
+		case strings.Contains(err.Error(), "tun: invalid argument"):
+			glog.Errorln(err)
+		default:
+			break HandleInterfaceError
+		}
+	}
 
 	return
 }
