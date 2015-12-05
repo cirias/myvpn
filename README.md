@@ -1,31 +1,12 @@
-## TODO
-- [x] Rename project
-- [x] Clean up code
-  - [x] server.go
-  - [x] error handle
-  - [x] replace `log` to `glog`
-- [x] Create hook script
-  - [x] create `conf.d` for both server and client
-  - [x] ip route for server address
-  - [x] set mtu
-  - [x] Excute script under dir
-  - [x] excute if-down when system signal reach
-- [x] Change to use UDP
-- [x] Add expire for client
-- [x] Replace ippool and portpool with channel
-- [x] Use random key for each client
-- [x] Rename constants and error code
-- [x] Merge portpool with ippool
-- [x] Replace client timer with client collection
-- [x] Handle tun error `invalid argument`
-- [x] Refactor log format
-- [ ] Choose default port
-- [ ] Write documents
-- [x] Systemd service
+## Overview
+Simple VPN for linux.
 
 ## Install
 Download the binary on the [release page](https://github.com/cirias/myvpn/releases).
-Extract the archive.
+
+```bash
+sudo tar xzvf myvpn-client.tgz -C /opt/
+```
 
 ## Usage
 
@@ -51,6 +32,8 @@ sudo ip route del default # you should backup the origin default route first
 # replace tun0 to your local interface name
 sudo ip route add default dev tun0
 ```
+You may want to create a custom shell script under `script/if-up.d/`
+including the commands above.
 
 #### Use as systemd service
 
@@ -70,7 +53,7 @@ ExecStart=/opt/myvpn-client/myvpn-client -server-addr=<serverip>:9525 -password=
 WantedBy=multi-user.target
 ```
 
-## Tech
+## How it works
 The VPN include two parts. First, client handshake with server.
 After handshake success, communication start.
 
@@ -121,3 +104,28 @@ Both packets are look like this:
 | 16 |     variable    |
 +----------------------+
 ```
+
+## TODO
+- [x] Rename project
+- [x] Clean up code
+  - [x] server.go
+  - [x] error handle
+  - [x] replace `log` to `glog`
+- [x] Create hook script
+  - [x] create `conf.d` for both server and client
+  - [x] ip route for server address
+  - [x] set mtu
+  - [x] Excute script under dir
+  - [x] excute if-down when system signal reach
+- [x] Change to use UDP
+- [x] Add expire for client
+- [x] Replace ippool and portpool with channel
+- [x] Use random key for each client
+- [x] Rename constants and error code
+- [x] Merge portpool with ippool
+- [x] Replace client timer with client collection
+- [x] Handle tun error `invalid argument`
+- [x] Refactor log format
+- [ ] Choose default port
+- [ ] Write documents
+- [x] Systemd service
