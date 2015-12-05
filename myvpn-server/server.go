@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 var ErrInvalidPassword = errors.New("Invalid password")
@@ -42,7 +43,7 @@ func NewServer(addr, password string, portBase int) (server *Server, err error) 
 	defer common.IfDown(tun.Name(), addr)
 	go func() {
 		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt, os.Kill)
+		signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGTERM)
 
 		s := <-c
 		glog.Infoln("Got signal:", s)

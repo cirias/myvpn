@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 )
 
 type Client struct {
@@ -141,7 +142,7 @@ func (client *Client) Run() (err error) {
 	defer common.IfDown(tun.Name(), client.internalAddr, tcpAddr.IP.String())
 	go func() {
 		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt, os.Kill)
+		signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGTERM)
 
 		s := <-c
 		glog.Infoln("Got signal:", s)
