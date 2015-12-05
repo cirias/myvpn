@@ -19,7 +19,6 @@
 - [x] Replace client timer with client collection
 - [x] Handle tun error `invalid argument`
 - [x] Refactor log format
-- [ ] Dockerize
 - [ ] Choose default port
 - [ ] Write documents
 - [ ] Systemd service

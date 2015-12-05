@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"github.com/cirias/myvpn/common"
 	"github.com/golang/glog"
@@ -75,10 +76,14 @@ func (client *Client) read(done <-chan struct{}) <-chan error {
 				plainQb.N = cipherQb.N - common.IVSize
 				cipherQb.Return()
 
-				glog.V(3).Infof("<%v> read n: %v data: %x\n", "client", plainQb.N, plainQb.Buffer[:plainQb.N])
-				client.UDPAddr = raddr
-				client.LastActiveTime = time.Now()
-				client.Output <- plainQb
+				if plainQb.N == 4 && bytes.Equal(plainQb.Buffer[:plainQb.N], common.Heartbeat) {
+					client.UDPAddr = raddr
+					client.LastActiveTime = time.Now()
+					client.Input <- plainQb
+				} else {
+					glog.V(3).Infof("<%v> read n: %v data: %x\n", "client", plainQb.N, plainQb.Buffer[:plainQb.N])
+					client.Output <- plainQb
+				}
 			}
 		}
 	}()

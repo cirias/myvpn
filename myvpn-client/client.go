@@ -19,7 +19,6 @@ type Client struct {
 	password     string
 	UDPHandle    *UDPHandle
 	Tun          *common.Interface
-	cipher       *common.Cipher
 }
 
 func NewClient(addr, password string) (client *Client, err error) {
@@ -44,7 +43,7 @@ func (client *Client) handshake(conn net.Conn) (err error) {
 		return
 	}
 
-	client.cipher, err = common.NewCipherWithKey(plaintext[common.IVSize:])
+	udpcipher, err := common.NewCipherWithKey(plaintext[common.IVSize:])
 	if err != nil {
 		return
 	}
@@ -88,7 +87,7 @@ func (client *Client) handshake(conn net.Conn) (err error) {
 	}
 	udpAddr.Port = port
 	glog.V(2).Infoln("server udp addr", udpAddr)
-	client.UDPHandle, err = NewUDPHandle(udpAddr)
+	client.UDPHandle, err = NewUDPHandle(udpAddr, udpcipher)
 	if err != nil {
 		return
 	}
@@ -99,42 +98,17 @@ func (client *Client) handshake(conn net.Conn) (err error) {
 
 func (client *Client) tun2conn() {
 	var qb *common.QueuedBuffer
-	var cipherQb *common.QueuedBuffer
 	for qb = range client.Tun.Output {
-		// Encrypt
-		cipherQb = common.LB.Get()
-
-		if err := client.cipher.Encrypt(cipherQb.Buffer[:common.IVSize], cipherQb.Buffer[common.IVSize:], qb.Buffer[:qb.N]); err != nil {
-			qb.Return()
-			cipherQb.Return()
-			glog.Fatalln("client encrypt", err)
-			continue
-		}
-
-		cipherQb.N = common.IVSize + qb.N
-		qb.Return()
-
-		client.UDPHandle.Input <- cipherQb
+		glog.V(3).Infof("tun2conn %vbytes: %x\n", qb.N, qb.Buffer[:qb.N])
+		client.UDPHandle.Input <- qb
 	}
 }
 
 func (client *Client) conn2tun() {
-	var cipherQb *common.QueuedBuffer
-	var plainQb *common.QueuedBuffer
-	for cipherQb = range client.UDPHandle.Output {
-		// Decrypt
-		plainQb = common.LB.Get()
-		if err := client.cipher.Decrypt(cipherQb.Buffer[:common.IVSize], plainQb.Buffer, cipherQb.Buffer[common.IVSize:cipherQb.N]); err != nil {
-			cipherQb.Return()
-			plainQb.Return()
-			glog.Fatalln("client decrypt", err)
-			continue
-		}
-
-		plainQb.N = cipherQb.N - common.IVSize
-		cipherQb.Return()
-
-		client.Tun.Input <- plainQb
+	var qb *common.QueuedBuffer
+	for qb = range client.UDPHandle.Output {
+		glog.V(3).Infof("conn2tun %vbytes: %x\n", qb.N, qb.Buffer[:qb.N])
+		client.Tun.Input <- qb
 	}
 }
 
@@ -196,6 +170,8 @@ HandleError:
 		switch {
 		case strings.Contains(err.Error(), "tun: invalid argument"):
 			glog.Errorln(err)
+		case err == ErrHeartbeatTimeout:
+			break HandleError
 		default:
 			break HandleError
 		}
