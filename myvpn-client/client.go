@@ -100,7 +100,7 @@ func (client *Client) handshake(conn net.Conn) (err error) {
 func (client *Client) tun2conn() {
 	var qb *common.QueuedBuffer
 	for qb = range client.Tun.Output {
-		glog.V(3).Infof("tun2conn %vbytes: %x\n", qb.N, qb.Buffer[:qb.N])
+		glog.V(2).Infof("tun2conn\n")
 		client.UDPHandle.Input <- qb
 	}
 }
@@ -108,7 +108,7 @@ func (client *Client) tun2conn() {
 func (client *Client) conn2tun() {
 	var qb *common.QueuedBuffer
 	for qb = range client.UDPHandle.Output {
-		glog.V(3).Infof("conn2tun %vbytes: %x\n", qb.N, qb.Buffer[:qb.N])
+		glog.V(2).Infof("conn2tun\n")
 		client.Tun.Input <- qb
 	}
 }

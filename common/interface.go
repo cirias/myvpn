@@ -45,7 +45,7 @@ func (i *Interface) read(done <-chan struct{}) chan error {
 					qb.Return()
 					errc <- err
 				} else {
-					glog.V(3).Infof("<%v> read n: %v data: %x\n", i.name, qb.N, qb.Buffer[:qb.N])
+					glog.V(3).Infof("read %vbytes from [%v]: %x\n", qb.N, i.name, qb.Buffer[:qb.N])
 					i.Output <- qb
 				}
 			}
@@ -64,7 +64,7 @@ func (i *Interface) write(done <-chan struct{}) chan error {
 
 		for qb = range i.Input {
 			n, err := i.rw.Write(qb.Buffer[:qb.N])
-			glog.V(3).Infof("<%v> write n: %v data: %x\n", i.name, n, qb.Buffer[:qb.N])
+			glog.V(3).Infof("wrote %vbytes to [%v]: %x\n", n, i.name, qb.Buffer[:n])
 			qb.Return()
 			select {
 			case <-done:

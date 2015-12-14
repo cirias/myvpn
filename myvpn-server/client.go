@@ -76,12 +76,13 @@ func (client *Client) read(done <-chan struct{}) <-chan error {
 				plainQb.N = cipherQb.N - common.IVSize
 				cipherQb.Return()
 
+				client.UDPAddr = raddr
+				client.LastActiveTime = time.Now()
+
 				if plainQb.N == 4 && bytes.Equal(plainQb.Buffer[:plainQb.N], common.Heartbeat) {
-					client.UDPAddr = raddr
-					client.LastActiveTime = time.Now()
 					client.Input <- plainQb
 				} else {
-					glog.V(3).Infof("<%v> read n: %v data: %x\n", "client", plainQb.N, plainQb.Buffer[:plainQb.N])
+					glog.V(3).Infof("read %vbytes from [%v]: %x\n", plainQb.N, raddr, plainQb.Buffer[:plainQb.N])
 					client.Output <- plainQb
 				}
 			}
@@ -111,7 +112,7 @@ func (client *Client) write(done <-chan struct{}) <-chan error {
 			plainQb.Return()
 
 			n, err := client.UDPConn.WriteToUDP(cipherQb.Buffer[:cipherQb.N], client.UDPAddr)
-			glog.V(3).Infof("<%v> write n: %v data: %x\n", "client", n, cipherQb.Buffer[:cipherQb.N])
+			glog.V(3).Infof("write %vbytes to [%v]: %x\n", n, client.UDPAddr, cipherQb.Buffer[:n])
 			cipherQb.Return()
 			select {
 			case <-done:

@@ -11,8 +11,6 @@ import (
 
 var ErrHeartbeatTimeout = errors.New("Heartbeat timeout")
 
-var timeout = time.Second * 5
-
 type UDPHandle struct {
 	timer   *time.Timer
 	cipher  *common.Cipher
@@ -47,7 +45,7 @@ func (handle *UDPHandle) read(done <-chan struct{}) <-chan error {
 
 		for {
 			cipherQb = common.LB.Get()
-			n, _, err := handle.UDPConn.ReadFromUDP(cipherQb.Buffer)
+			n, raddr, err := handle.UDPConn.ReadFromUDP(cipherQb.Buffer)
 			cipherQb.N = n
 			select {
 			case <-done:
@@ -73,7 +71,7 @@ func (handle *UDPHandle) read(done <-chan struct{}) <-chan error {
 			if plainQb.N == 4 && bytes.Equal(plainQb.Buffer[:plainQb.N], common.Heartbeat) {
 				handle.timer.Reset(timeout)
 			} else {
-				glog.V(4).Infof("read %vbytes to <%v>: %x\n", plainQb.N, plainQb.Buffer[:plainQb.N])
+				glog.V(3).Infof("read %vbytes to <%v>: %x\n", plainQb.N, raddr, plainQb.Buffer[:plainQb.N])
 				handle.Output <- plainQb
 			}
 		}
@@ -105,7 +103,7 @@ func (handle *UDPHandle) write(done <-chan struct{}) <-chan error {
 
 			n, err := handle.UDPConn.WriteToUDP(cipherQb.Buffer[:cipherQb.N], handle.UDPAddr)
 			cipherQb.Return()
-			glog.V(4).Infof("write %vbytes to <%v>: %x\n", n, handle.UDPAddr, cipherQb.Buffer[:n])
+			glog.V(3).Infof("write %vbytes to <%v>: %x\n", n, handle.UDPAddr, cipherQb.Buffer[:n])
 			select {
 			case <-done:
 				return
@@ -139,7 +137,7 @@ func (handle *UDPHandle) heartbeat(done <-chan struct{}) {
 			case <-done:
 				return
 			default:
-				time.Sleep(time.Second)
+				time.Sleep(interval)
 				qb = common.LB.Get()
 				copy(qb.Buffer, common.Heartbeat)
 				qb.N = len(common.Heartbeat)
@@ -149,14 +147,18 @@ func (handle *UDPHandle) heartbeat(done <-chan struct{}) {
 	}()
 }
 
-func (handle *UDPHandle) Run(done chan struct{}) <-chan error {
+func (handle *UDPHandle) Run(done chan struct{}) (errc <-chan error) {
 	wec := handle.write(done)
 	rec := handle.read(done)
 
-	handle.heartbeat(done)
-	tec := handle.setTimeout(done)
+	if enableHeartbeat {
+		handle.heartbeat(done)
+		tec := handle.setTimeout(done)
 
-	errc := common.Merge(done, wec, rec, tec)
+		errc = common.Merge(done, wec, rec, tec)
+	} else {
+		errc = common.Merge(done, wec, rec)
+	}
 
-	return errc
+	return
 }
