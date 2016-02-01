@@ -14,7 +14,7 @@ ip_addr() {
 
 ip_link() {
   # 1432 = 1500 - 60 - 8 - 16
-  ip link set dev "$1" mtu 1416
+  #ip link set dev "$1" mtu 1416
   ip link set dev "$1" up
 }
 

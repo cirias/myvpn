@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 )
 
@@ -168,11 +167,9 @@ func (client *Client) Run() (err error) {
 
 HandleError:
 	for err = range errc {
-		switch {
-		case strings.Contains(err.Error(), "tun: invalid argument"):
+		switch err {
+		case os.ErrInvalid:
 			glog.Errorln(err)
-		case err == ErrHeartbeatTimeout:
-			break HandleError
 		default:
 			break HandleError
 		}

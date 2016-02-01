@@ -11,7 +11,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 )
@@ -318,8 +317,8 @@ func (server *Server) Run(laddr string) (err error) {
 
 HandleInterfaceError:
 	for err = range errc {
-		switch {
-		case strings.Contains(err.Error(), "tun: invalid argument"):
+		switch err {
+		case os.ErrInvalid:
 			glog.Errorln(err)
 		default:
 			break HandleInterfaceError

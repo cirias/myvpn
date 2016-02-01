@@ -1,15 +1,11 @@
 package main
 
 import (
-	"bytes"
-	"errors"
 	"github.com/cirias/myvpn/common"
 	"github.com/golang/glog"
 	"net"
 	"time"
 )
-
-var ErrHeartbeatTimeout = errors.New("Heartbeat timeout")
 
 type UDPHandle struct {
 	timer   *time.Timer
@@ -68,12 +64,8 @@ func (handle *UDPHandle) read(done <-chan struct{}) <-chan error {
 			plainQb.N = cipherQb.N - common.IVSize
 			cipherQb.Return()
 
-			if plainQb.N == 4 && bytes.Equal(plainQb.Buffer[:plainQb.N], common.Heartbeat) {
-				handle.timer.Reset(timeout)
-			} else {
-				glog.V(3).Infof("read %vbytes to <%v>: %x\n", plainQb.N, raddr, plainQb.Buffer[:plainQb.N])
-				handle.Output <- plainQb
-			}
+			glog.V(3).Infof("read %vbytes to <%v>: %x\n", plainQb.N, raddr, plainQb.Buffer[:plainQb.N])
+			handle.Output <- plainQb
 		}
 	}()
 	return errc
@@ -117,48 +109,11 @@ func (handle *UDPHandle) write(done <-chan struct{}) <-chan error {
 	return errc
 }
 
-func (handle *UDPHandle) setTimeout(done <-chan struct{}) <-chan error {
-	errc := make(chan error)
-	handle.timer = time.AfterFunc(timeout, func() {
-		errc <- ErrHeartbeatTimeout
-	})
-	go func() {
-		<-done
-		handle.timer.Stop()
-	}()
-	return errc
-}
-
-func (handle *UDPHandle) heartbeat(done <-chan struct{}) {
-	var qb *common.QueuedBuffer
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			default:
-				time.Sleep(interval)
-				qb = common.LB.Get()
-				copy(qb.Buffer, common.Heartbeat)
-				qb.N = len(common.Heartbeat)
-				handle.Input <- qb
-			}
-		}
-	}()
-}
-
 func (handle *UDPHandle) Run(done chan struct{}) (errc <-chan error) {
 	wec := handle.write(done)
 	rec := handle.read(done)
 
-	if enableHeartbeat {
-		handle.heartbeat(done)
-		tec := handle.setTimeout(done)
-
-		errc = common.Merge(done, wec, rec, tec)
-	} else {
-		errc = common.Merge(done, wec, rec)
-	}
+	errc = common.Merge(done, wec, rec)
 
 	return
 }
