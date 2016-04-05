@@ -23,3 +23,10 @@ ip_link() {
 ip_addr "$IF" "$LocalIP"
 
 ip_link "$IF"
+
+DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+
+for f in `ls $DIR/ip-up.d/*.sh`; do
+  echo "$DIR/ip-up.d/$f" "$@"
+  bash "$DIR/ip-up.d/$f" "$@"
+done

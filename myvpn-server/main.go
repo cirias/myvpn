@@ -15,13 +15,14 @@ import (
 )
 
 func main() {
-	var network, secret, listenAddr, ipnet, hookDir string
+	var network, secret, listenAddr, ipnet, upScript, downScript string
 
 	flag.StringVar(&network, "network", "udp", "network of transport layer")
 	flag.StringVar(&secret, "secret", "", "secret")
 	flag.StringVar(&listenAddr, "listen-addr", "0.0.0.0:9525", "listening address")
 	flag.StringVar(&ipnet, "ipnet", "10.0.200.1/24", "internal ip net")
-	flag.StringVar(&hookDir, "hook-dir", "/etc/myvpn", "hook directory")
+	flag.StringVar(&upScript, "up-script", "./if-up.sh", "up shell script file path")
+	flag.StringVar(&downScript, "down-script", "./if-down.sh", "down shell script file path")
 	flag.Parse()
 
 	ip, ipNet, err := net.ParseCIDR(ipnet)
@@ -32,17 +33,20 @@ func main() {
 	if err != nil {
 		glog.Fatalln(err)
 	}
+	glog.Infoln("start listening")
 
-	tun, err := tun.NewTun(&net.IPNet{ip, ipNet.Mask}, hookDir)
+	tun, err := tun.NewTUN("", &ip, &ipNet.Mask)
 	if err != nil {
 		glog.Fatalln(err)
 	}
+	defer tun.Close()
 
-	err = tun.Up(listenAddr)
+	err = tun.Up(upScript, listenAddr)
 	if err != nil {
 		glog.Fatalln(err)
 	}
-	defer tun.Down(listenAddr)
+	defer tun.Down(downScript, listenAddr)
+	glog.Infoln(tun.Name(), " is ready")
 
 	s := NewServer(tun, ipNet)
 	defer s.Close()
@@ -54,22 +58,23 @@ func main() {
 		signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGTERM)
 
 		s := <-c
-		errc <- errors.New("signal: " + s.String())
+		errc <- errors.New(s.String())
 	}()
 
 	go func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
-				glog.Errorln("Accept", err)
+				glog.Errorln("fail to accept", err)
 			}
 
 			go s.Handle(c)
 		}
 	}()
+	glog.Infoln("waiting client")
 
 	err = <-errc
-	glog.Info("Process quit", err)
+	glog.Info("process quit", err)
 
 	return
 }

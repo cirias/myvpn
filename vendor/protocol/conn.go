@@ -43,16 +43,26 @@ type response struct {
 }
 
 type Conn struct {
-	*CipherReadWriter
+	*CipherConn
 	IPNet *net.IPNet
 	pool  *ConnectionPool
+}
+
+func (c *Conn) IP() (ip net.IP) {
+	switch c.RemoteAddr().(type) {
+	case *net.TCPAddr:
+		ip = c.RemoteAddr().(*net.TCPAddr).IP
+	case *net.UDPAddr:
+		ip = c.RemoteAddr().(*net.UDPAddr).IP
+	}
+	return
 }
 
 func (c *Conn) Close() error {
 	if c.pool != nil {
 		c.pool.Put(c)
 	}
-	return c.CipherReadWriter.Close()
+	return c.CipherConn.Close()
 }
 
 func Dial(network, secret, remoteAddr string) (conn *Conn, err error) {
@@ -69,6 +79,7 @@ func Dial(network, secret, remoteAddr string) (conn *Conn, err error) {
 		err = ErrInvalidProto
 	}
 	if err != nil {
+		glog.V(1).Infoln("fail to dial to server", err, network, remoteAddr)
 		return
 	}
 
@@ -88,20 +99,23 @@ func Dial(network, secret, remoteAddr string) (conn *Conn, err error) {
 	}
 	copy(req.Key[:], key)
 
-	crw := &CipherReadWriter{
-		ReadWriteCloser: c,
-		Cipher:          cipher,
+	cc := &CipherConn{
+		Conn:   c,
+		Cipher: cipher,
 	}
-	if err = binary.Write(crw, binary.BigEndian, req); err != nil {
-		glog.Infoln("Dial:", err)
+	if err = binary.Write(cc, binary.BigEndian, req); err != nil {
+		glog.V(1).Infoln("fail to write to cipherconn", err)
 		return
 	}
+	glog.V(3).Infoln("write to cipherconn", req)
 
 	// Recieve
 	res := response{}
-	if err = binary.Read(crw, binary.BigEndian, &res); err != nil {
+	if err = binary.Read(cc, binary.BigEndian, &res); err != nil {
+		glog.V(1).Infoln("fail to read from cipherconn", err)
 		return
 	}
+	glog.V(3).Infoln("read from cipherconn", res)
 
 	switch res.Status {
 	case StatusOK:
@@ -123,10 +137,10 @@ func Dial(network, secret, remoteAddr string) (conn *Conn, err error) {
 
 	// Initialize conn
 	conn = &Conn{
-		CipherReadWriter: &CipherReadWriter{},
-		IPNet:            &net.IPNet{res.IP[:], res.IPMask[:]},
+		CipherConn: &CipherConn{},
+		IPNet:      &net.IPNet{res.IP[:], res.IPMask[:]},
 	}
-	conn.ReadWriteCloser = c
+	conn.Conn = c
 	conn.Cipher, err = NewCipher(key)
 	return
 }
@@ -170,8 +184,8 @@ func Listen(network, secret, localAddr string, internalIP net.IP, ipNet *net.IPN
 }
 
 type exception struct {
-	Err error
-	CRW *CipherReadWriter
+	err error
+	cc  *CipherConn
 }
 
 func (ln Listener) Accept() (conn *Conn, err error) {
@@ -180,8 +194,9 @@ func (ln Listener) Accept() (conn *Conn, err error) {
 			switch r.(type) {
 			case exception:
 				e := r.(exception)
+				glog.V(1).Infoln("fail to accept", err)
 				res := response{}
-				switch e.Err {
+				switch e.err {
 				case ErrInvalidSecret:
 					res.Status = StatusInvalidSecret
 				case ErrInvalidProto:
@@ -191,7 +206,9 @@ func (ln Listener) Accept() (conn *Conn, err error) {
 				default:
 					res.Status = StatusUnknowErr
 				}
-				binary.Write(e.CRW, binary.BigEndian, res)
+				if err := binary.Write(e.cc, binary.BigEndian, res); err != nil {
+					glog.V(1).Infoln("fail to write to cipherconn")
+				}
 			default:
 				panic(r)
 			}
@@ -203,30 +220,35 @@ func (ln Listener) Accept() (conn *Conn, err error) {
 	for {
 		c, err = ln.Listener.Accept()
 		if err != nil {
+			glog.V(1).Infoln("fail to accept from listener", err)
 			return conn, err
 		}
 
-		crw := &CipherReadWriter{
-			ReadWriteCloser: c,
-			Cipher:          ln.Cipher,
+		cc := &CipherConn{
+			Conn:   c,
+			Cipher: ln.Cipher,
 		}
 
 		// Recieve
-		binary.Read(crw, binary.BigEndian, &req)
+		if err := binary.Read(cc, binary.BigEndian, &req); err != nil {
+			glog.V(1).Infoln("fail to read from cipherconn")
+			continue
+		}
+		glog.V(3).Infoln("read from cipherconn", req)
 
 		if req.Secret != ln.Secret {
-			panic(exception{ErrInvalidSecret, crw})
+			panic(exception{ErrInvalidSecret, cc})
 			continue
 		}
 
 		if req.Proto != ln.Proto {
-			panic(exception{ErrInvalidProto, crw})
+			panic(exception{ErrInvalidProto, cc})
 			continue
 		}
 
 		conn, err := ln.CP.Get()
 		if err != nil {
-			panic(exception{err, crw})
+			panic(exception{err, cc})
 			continue
 		}
 
@@ -239,9 +261,13 @@ func (ln Listener) Accept() (conn *Conn, err error) {
 		res := response{Status: StatusOK}
 		copy(res.IP[:], conn.IPNet.IP.To4())
 		copy(res.IPMask[:], conn.IPNet.Mask)
-		binary.Write(crw, binary.BigEndian, res)
+		if err := binary.Write(cc, binary.BigEndian, res); err != nil {
+			glog.V(1).Infoln("fail to write to cipherconn")
+			continue
+		}
+		glog.V(3).Infoln("write to cipherconn", res)
 
-		conn.ReadWriteCloser = c
+		conn.Conn = c
 
 		return conn, err
 	}

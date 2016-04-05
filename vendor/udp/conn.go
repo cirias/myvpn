@@ -35,19 +35,22 @@ func (c *serverConn) RemoteAddr() net.Addr {
 func (c *serverConn) Read(b []byte) (n int, err error) {
 	select {
 	case err = <-c.error:
+		glog.V(1).Infoln("udp serverConn read", err)
 		return
 	case s := <-c.input:
+		glog.V(3).Infoln("udp serverConn read", s)
 		copy(b, s)
 		return len(s), nil
 	}
 }
 
 func (c *serverConn) Write(b []byte) (n int, err error) {
-	glog.Infoln("Write:", c.raddr, b)
+	glog.V(3).Infoln("udp serverConn write", c.raddr, b)
 	return c.WriteToUDP(b, c.raddr)
 }
 
 func (c *serverConn) Close() error {
+	glog.V(2).Infoln("udp serverConn close")
 	c.ln.mutex.Lock()
 	delete(c.ln.conns, c.RemoteAddr().String())
 	c.ln.mutex.Unlock()
@@ -85,10 +88,11 @@ func Listen(network, address string) (ln *Listener, err error) {
 		for {
 			select {
 			case <-ln.done:
-				break
+				return
 			default:
 			}
 
+			// allocate memory every time may be a bad ideal
 			b := make([]byte, 65535)
 			n, raddr, err := ln.udpConn.ReadFromUDP(b)
 
@@ -117,23 +121,25 @@ func Listen(network, address string) (ln *Listener, err error) {
 }
 
 func (ln *Listener) Accept() (conn net.Conn, err error) {
-	glog.Infoln("Accept:", "waiting")
+	glog.V(2).Infoln("udp listener waiting to accept")
 	select {
 	case conn = <-ln.new:
 	case err = <-ln.newErr:
 	}
 	if err != nil {
+		glog.V(1).Infoln("udp listener fail to accept", err)
 		return
 	}
 
-	glog.Infoln("Accept:", conn.RemoteAddr())
 	ln.mutex.Lock()
 	ln.conns[conn.RemoteAddr().String()] = conn.(*serverConn)
 	ln.mutex.Unlock()
+	glog.V(2).Infoln("udp listener accepted", conn.RemoteAddr())
 	return
 }
 
 func (ln *Listener) Close() (err error) {
+	glog.V(2).Infoln("udp listener closing")
 	ln.done <- struct{}{}
 
 	return ln.udpConn.Close()

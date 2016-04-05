@@ -15,11 +15,11 @@ import (
 type Server struct {
 	rwm     sync.RWMutex
 	clients map[string]*Client
-	tun     *tun.Tun
+	tun     *tun.Interface
 	quit    chan struct{}
 }
 
-func NewServer(t *tun.Tun, n *net.IPNet) (s *Server) {
+func NewServer(t *tun.Interface, n *net.IPNet) (s *Server) {
 	s = &Server{
 		clients: make(map[string]*Client),
 		tun:     t,
@@ -37,19 +37,24 @@ func NewServer(t *tun.Tun, n *net.IPNet) (s *Server) {
 			default:
 			}
 			n, err := t.Read(b)
-			if err != nil {
-				glog.Errorln("Read from tun", err)
+			if err == io.EOF {
+				if n == 0 {
+					return
+				}
+			} else if err != nil {
+				glog.Errorln("fail to read from tun", err)
+				continue
 			}
 
 			dst = b[16:20]
 			if c := s.clients[dst.String()]; c != nil {
-				glog.Infoln("Write to", dst)
+				glog.V(1).Infoln("write to", dst)
 				_, err := c.Write(b[:n])
 				if err != nil {
-					glog.Errorln("Write to", dst, err)
+					glog.Errorln("fail to write to", dst, err)
 				}
 			} else {
-				glog.Infoln("Unknown distination", dst)
+				glog.Warningln("Unknown distination", dst)
 			}
 		}
 	}()
@@ -64,7 +69,7 @@ func (s *Server) Handle(conn *protocol.Conn) {
 		quit:      make(chan struct{}),
 	}
 	defer c.Close()
-	defer glog.Infoln("Client quit", c.IPNet.IP)
+	defer glog.Infoln("client quit", c.IPNet.IP)
 
 	s.rwm.Lock()
 	s.clients[c.IPNet.IP.String()] = c
@@ -86,12 +91,12 @@ func (s *Server) Handle(conn *protocol.Conn) {
 		}
 
 		n, err := c.Read(b)
-		if err != nil {
-			if err == io.EOF {
+		if err == io.EOF {
+			if n == 0 {
 				return
 			}
-
-			glog.Errorln("Read from client", c.IPNet.IP, err)
+		} else if err != nil {
+			glog.Errorln("fail to read from client", c.IPNet.IP, err)
 			continue
 		}
 		c.timestamp = time.Now()
@@ -104,12 +109,13 @@ func (s *Server) Handle(conn *protocol.Conn) {
 			_, err = s.tun.Write(b[:n])
 		}
 		if err != nil {
-			glog.Errorln("Write to", dst, err)
+			glog.Errorln("fail to write to client", dst, err)
 		}
 	}
 }
 
 func (s *Server) RecycleClient() {
+	glog.Infoln("start recycling clients")
 	var oldest *Client
 
 	s.rwm.RLock()
@@ -126,16 +132,17 @@ func (s *Server) RecycleClient() {
 	s.rwm.RUnlock()
 
 	if oldest != nil {
-		glog.Infoln("Recycle client", oldest.IPNet.IP)
+		glog.V(1).Infoln("recycle client", oldest.IPNet.IP)
 		close(oldest.quit)
 	} else {
-		glog.Infoln("Can't recycle: empty clients")
+		glog.Warningln("fail to recycle: empty clients")
 	}
 
 	return
 }
 
 func (s *Server) Close() {
+	glog.Infoln("server closing")
 	close(s.quit)
 
 	s.rwm.RLock()

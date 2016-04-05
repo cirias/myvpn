@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"io"
+	"net"
 )
 
 const (
@@ -32,14 +33,14 @@ func NewCipher(key []byte) (c *Cipher, err error) {
 	return
 }
 
-type CipherReadWriter struct {
-	io.ReadWriteCloser
+type CipherConn struct {
+	net.Conn
 	Cipher *Cipher
 }
 
-func (crw *CipherReadWriter) Read(b []byte) (n int, err error) {
+func (crw *CipherConn) Read(b []byte) (n int, err error) {
 	ciphertext := make([]byte, IVSize+len(b))
-	n, err = crw.ReadWriteCloser.Read(ciphertext)
+	n, err = crw.Conn.Read(ciphertext)
 	if err != nil {
 		return 0, err
 	}
@@ -49,7 +50,7 @@ func (crw *CipherReadWriter) Read(b []byte) (n int, err error) {
 	return n - IVSize, err
 }
 
-func (crw *CipherReadWriter) Write(b []byte) (n int, err error) {
+func (crw *CipherConn) Write(b []byte) (n int, err error) {
 	ciphertext := make([]byte, IVSize+len(b))
 	if _, err = io.ReadFull(rand.Reader, ciphertext[:IVSize]); err != nil {
 		return
@@ -57,5 +58,5 @@ func (crw *CipherReadWriter) Write(b []byte) (n int, err error) {
 
 	stream := cipher.NewOFB(crw.Cipher.block, ciphertext[:IVSize])
 	stream.XORKeyStream(ciphertext[IVSize:], b)
-	return crw.ReadWriteCloser.Write(ciphertext)
+	return crw.Conn.Write(ciphertext)
 }
