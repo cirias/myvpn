@@ -32,9 +32,9 @@ func NewConnectionPool(reserveIP net.IP, ipNet *net.IPNet) (p *ConnectionPool) {
 		}
 
 		p.cc <- &Conn{
-			CipherReadWriter: &CipherReadWriter{},
-			IPNet:            &net.IPNet{ip, ipNet.Mask},
-			pool:             p,
+			CipherConn: &CipherConn{},
+			IPNet:      &net.IPNet{ip, ipNet.Mask},
+			pool:       p,
 		}
 	}
 	return
