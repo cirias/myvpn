@@ -19,18 +19,18 @@
                                                                   =============
 ##Dependency
   The test program relies on:
-      1. Docker
-      2. Wireshark
+  * Docker
+  * Wireshark
   And it only supports Linux operating system.
 ##How to run:
   In the test directory, please follow below steps:
-      1. $make build
-      2. $make run    
-      3. You should be able to see both wireshark and a mininet console. In the mininet console, run below commands to start **myvpn**:
-         * mininet>server ./tinyvpn/server-start.sh
-         * mininet>client ./tinyvpn/client-start.sh
+  * $make build
+  * $make run    
+  * You should be able to see both wireshark and a mininet console. In the mininet console, run below commands to start **myvpn**:
+    * mininet>server ./tinyvpn/server-start.sh
+    * mininet>client ./tinyvpn/client-start.sh
       You should be able to observe the connection established.
-      4. The network qos can be adjusted in the Makefile, by changing $(CMD_START_MN) with qos settings.
+  * The network qos can be adjusted in the Makefile, by changing $(CMD_START_MN) with qos settings.
 
 ##How to observe:
   * Open another console of the mininet container
