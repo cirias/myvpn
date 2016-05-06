@@ -22,7 +22,8 @@
   * Docker
   * Wireshark
   And it only supports Linux operating system.
-##How to run:
+
+##How to run
   In the test directory, please follow below steps:
   * $make build
   * $make run    
@@ -32,7 +33,7 @@
       You should be able to observe the connection established.
   * The network qos can be adjusted in the Makefile, by changing $(CMD_START_MN) with qos settings.
 
-##How to observe:
+##How to observe
   * Open another console of the mininet container
     $docker attach tinyvpn_mininet
   * Observe the network status of each host
