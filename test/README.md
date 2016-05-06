@@ -21,7 +21,7 @@
   The test program relies on:
   * Docker
   * Wireshark
-  And it only supports Linux operating system.
+  * Only supports Linux operating system.
 
 ##How to run
   In the test directory, please follow below steps:
@@ -30,16 +30,17 @@
   * You should be able to see both wireshark and a mininet console. In the mininet console, run below commands to start **myvpn**:
     * mininet>server ./tinyvpn/server-start.sh
     * mininet>client ./tinyvpn/client-start.sh
-      You should be able to observe the connection established.
+    * You should be able to observe the connection established.
   * The network qos can be adjusted in the Makefile, by changing $(CMD_START_MN) with qos settings.
 
 ##How to observe
   * Open another console of the mininet container
-    $docker attach tinyvpn_mininet
+    * $docker attach tinyvpn_mininet
   * Observe the network status of each host
-    mininet>client ip route
-    mininet>client ifconfig -a
-  * You can filter the packets in Wireshark by adding filers. For example:
+    * mininet>client ip route
+    * mininet>client ifconfig -a
+  * You can filter the packets in Wireshark by adding filers.
+    For example:
     ip.src == 10.0.1.100
   
 
