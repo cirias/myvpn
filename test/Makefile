@@ -31,7 +31,7 @@ run: clean start_container
 	docker exec -it $(MININET_NAME) $(CMD_START_MN) 
 
 start_container:
-	docker run --privileged -d -it --name $(MININET_NAME) docker-mininet 
+	docker run --privileged --cap-add=ALL -v /lib/modules:/lib/modules -d -it --name $(MININET_NAME) docker-mininet 
 	docker cp tinyvpn_topo.py $(MININET_NAME):/projects/
 	docker exec $(MININET_NAME) $(CMD_START_OVS)
 	docker run --rm --net=container:$(MININET_NAME) --name $(TCPDUMP_NAME) docker-tcpdump -i any --immediate-mode -w - | wireshark -k -i - &
