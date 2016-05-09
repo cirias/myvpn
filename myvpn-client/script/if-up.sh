@@ -26,7 +26,7 @@ ip_link "$IF"
 
 DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 
-for f in `ls $DIR/ip-up.d/*.sh`; do
-  echo "$DIR/ip-up.d/$f" "$@"
-  bash "$DIR/ip-up.d/$f" "$@"
+for f in `ls $DIR/if-up.d/*.sh`; do
+  echo "$f" "$@"
+  bash "$f" "$@"
 done

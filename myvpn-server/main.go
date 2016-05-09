@@ -1,32 +1,80 @@
 package main
 
 import (
+	"errors"
 	"flag"
+	"net"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"protocol"
+	"tun"
+
 	"github.com/golang/glog"
 )
 
 func main() {
-	var ipAddr, listenAddr, password string
-	var portBase int
+	var network, secret, listenAddr, ipnet, upScript, downScript string
 
-	flag.StringVar(&ipAddr, "ip-addr", "10.0.200.1/24", "server internal ip")
+	flag.StringVar(&network, "network", "udp", "network of transport layer")
+	flag.StringVar(&secret, "secret", "", "secret")
 	flag.StringVar(&listenAddr, "listen-addr", "0.0.0.0:9525", "listening address")
-	flag.StringVar(&password, "password", "", "password")
-	flag.IntVar(&portBase, "port-base", 61000, "base of the port pool")
+	flag.StringVar(&ipnet, "ipnet", "10.0.200.1/24", "internal ip net")
+	flag.StringVar(&upScript, "up-script", "./if-up.sh", "up shell script file path")
+	flag.StringVar(&downScript, "down-script", "./if-down.sh", "down shell script file path")
 	flag.Parse()
 
-	var err error
-
-	glog.V(4).Infoln("NewServer")
-	server, err := NewServer(ipAddr, password, portBase)
+	ip, ipNet, err := net.ParseCIDR(ipnet)
 	if err != nil {
 		glog.Fatalln(err)
 	}
-
-	glog.V(4).Infoln("server.Run")
-	if err = server.Run(listenAddr); err != nil {
+	ln, err := protocol.Listen(network, secret, listenAddr, ip, ipNet)
+	if err != nil {
 		glog.Fatalln(err)
 	}
+	glog.Infoln("start listening")
+
+	tun, err := tun.NewTUN("", &ip, &ipNet.Mask)
+	if err != nil {
+		glog.Fatalln(err)
+	}
+	defer tun.Close()
+
+	err = tun.Up(upScript, listenAddr)
+	if err != nil {
+		glog.Fatalln(err)
+	}
+	defer tun.Down(downScript, listenAddr)
+	glog.Infoln(tun.Name(), " is ready")
+
+	s := NewServer(tun, ipNet)
+	defer s.Close()
+
+	errc := make(chan error)
+
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGTERM)
+
+		s := <-c
+		errc <- errors.New(s.String())
+	}()
+
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				glog.Errorln("fail to accept", err)
+			}
+
+			go s.Handle(c)
+		}
+	}()
+	glog.Infoln("waiting client")
+
+	err = <-errc
+	glog.Info("process quit", err)
 
 	return
 }
