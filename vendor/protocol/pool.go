@@ -1,12 +1,8 @@
 package protocol
 
 import (
-	"errors"
 	"net"
 )
-
-var ErrNoIPAddrAvaliable = errors.New("No IPAddr avaliable")
-var ErrIPAddrPoolFull = errors.New("IPAddrPool is full")
 
 type IPAddrPool chan *net.IPNet
 

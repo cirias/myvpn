@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"io"
@@ -12,32 +13,81 @@ import (
 	"github.com/golang/glog"
 )
 
-type Conn interface {
-	ReadPacket(b []byte) (int, error)
-}
+func DialTCP(secret, remoteAddr string) (conn *TCPConn, err error) {
+	c, err := net.Dial("tcp", remoteAddr)
+	if err != nil {
+		glog.Errorln("fail to dial to server", err, remoteAddr)
+		return
+	}
 
-type Listener interface {
-	Accept() (Conn, error)
-	Close() error
-}
-
-func ListenTCP(secret, localAddr string, internalIP net.IP, ipNet *net.IPNet) (ln Listener, err error) {
-	tcpln := &TCPListener{}
-	tcpln.Listener, err = net.Listen("tcp", localAddr)
+	cph, err := cipher.NewCipher([]byte(secret))
 	if err != nil {
 		return
 	}
 
-	tcpln.cipher, err = cipher.NewCipher([]byte(secret))
-	if err != nil {
+	key := make([]byte, cipher.KeySize)
+	if _, err = io.ReadFull(rand.Reader, key); err != nil {
 		return
 	}
 
-	tcpln.ipAddrPool = NewIPAddrPool(internalIP, ipNet)
-	tcpln.secret = sha256.Sum256([]byte(secret))
+	req := request{
+		Secret: sha256.Sum256([]byte(secret)),
+	}
+	copy(req.Key[:], key)
 
-	ln = tcpln
+	if err = send(cph, c, &req); err != nil {
+		glog.Error("fail to send request", err)
+		return
+	}
+
+	res := response{}
+	if err = recieve(cph, c, &res); err != nil {
+		glog.Error("fail to recieve response", err)
+		return
+	}
+
+	switch res.Status {
+	case StatusOK:
+	case StatusUnknowErr:
+		fallthrough
+	case StatusInvalidSecret:
+		err = ErrInvalidSecret
+		return
+	case StatusInvalidProto:
+		err = ErrInvalidProto
+		return
+	case StatusNoIPAddrAvaliable:
+		err = ErrNoIPAddrAvaliable
+		return
+	default:
+		err = ErrUnknowErr
+		return
+	}
+
+	// Initialize conn
+	conn = &TCPConn{}
+	conn.Conn = c
+	conn.cipher, err = cipher.NewCipher(key)
 	return
+}
+
+func ListenTCP(secret, localAddr string, internalIP net.IP, ipNet *net.IPNet) (ln *TCPListener, err error) {
+	ln = &TCPListener{}
+	ln.Listener, err = net.Listen("tcp", localAddr)
+	if err != nil {
+		return
+	}
+
+	ln.cipher, err = cipher.NewCipher([]byte(secret))
+	if err != nil {
+		return
+	}
+
+	ln.ipAddrPool = NewIPAddrPool(internalIP, ipNet)
+	ln.secret = sha256.Sum256([]byte(secret))
+
+	return
+
 }
 
 type TCPListener struct {
@@ -48,7 +98,7 @@ type TCPListener struct {
 }
 
 // Currently one client acceping will block all other clients' request
-func (ln *TCPListener) Accept() (conn Conn, err error) {
+func (ln *TCPListener) Accept() (conn *TCPConn, err error) {
 	var c net.Conn
 	for {
 		c, err = ln.Listener.Accept()
@@ -57,77 +107,75 @@ func (ln *TCPListener) Accept() (conn Conn, err error) {
 			return conn, err
 		}
 
-		req, err := ln.recieve(c)
-		if err != nil {
+		req := request{}
+		if err := recieve(ln.cipher, c, &req); err != nil {
 			glog.Errorln("fail to recieve request", err)
 			continue
 		}
 
 		if req.Secret != ln.secret {
-			ln.send(c, &response{Status: StatusInvalidSecret})
+			send(ln.cipher, c, response{Status: StatusInvalidSecret})
 			continue
 		}
 
-		tcpConn := &TCPConn{}
+		conn = &TCPConn{}
 		ip, err := ln.ipAddrPool.Get()
 		if err != nil {
-			ln.send(c, &response{Status: StatusNoIPAddrAvaliable})
+			send(ln.cipher, c, response{Status: StatusNoIPAddrAvaliable})
 			continue
 		}
 
-		tcpConn.cipher, err = cipher.NewCipher(req.Key[:])
+		conn.cipher, err = cipher.NewCipher(req.Key[:])
 		if err != nil {
 			return conn, err
 		}
 
-		res := &response{
+		res := response{
 			Status: StatusOK,
 		}
 		copy(res.IP[:], ip.IP.To4())
 		copy(res.IPMask[:], ip.Mask)
-		ln.send(c, res)
+		send(ln.cipher, c, &res)
 
-		tcpConn.Conn = c
-		conn = tcpConn
+		conn.Conn = c
 
 		return conn, err
 	}
 }
 
-func (ln *TCPListener) recieve(tcpConn net.Conn) (req *request, err error) {
+func recieve(cph *cipher.Cipher, tcpConn net.Conn, data interface{}) (err error) {
 	iv := make([]byte, cipher.IVSize)
 	if _, err = io.ReadFull(tcpConn, iv); err != nil {
 		glog.V(3).Infoln("fail to read iv", err)
 		return
 	}
-	dec := cipher.NewDecrypter(ln.cipher, iv)
-	req = &request{}
-	encrypted := make([]byte, binary.Size(*req))
+	dec := cipher.NewDecrypter(cph, iv)
+	encrypted := make([]byte, binary.Size(data))
 	if _, err = io.ReadFull(tcpConn, encrypted); err != nil {
-		glog.V(3).Infoln("fail to read encrypted request", err)
+		glog.V(3).Infoln("fail to read encrypted data", err)
 		return
 	}
 	decrypted := make([]byte, binary.Size(encrypted))
 	dec.Decrypt(encrypted, decrypted)
-	if err = binary.Read(bytes.NewBuffer(decrypted), binary.BigEndian, req); err != nil {
-		glog.V(3).Infoln("fail to unmarshal request", err)
+	if err = binary.Read(bytes.NewBuffer(decrypted), binary.BigEndian, data); err != nil {
+		glog.V(3).Infoln("fail to unmarshal data", err)
 		return
 	}
-	glog.V(3).Infoln("request recieved", *req)
+	glog.V(3).Infoln("data recieved", data)
 	return
 }
 
-func (ln *TCPListener) send(tcpConn net.Conn, res *response) error {
+func send(cph *cipher.Cipher, tcpConn net.Conn, data interface{}) error {
 	iv, err := cipher.NewIV()
 	if err != nil {
 		glog.V(3).Infoln("fail to create iv", err)
 		return err
 	}
 
-	enc := cipher.NewEncrypter(ln.cipher, iv)
-	unencypted := make([]byte, binary.Size(*res))
-	if err := binary.Write(bytes.NewBuffer(unencypted), binary.BigEndian, res); err != nil {
-		glog.V(3).Infoln("fail to marshal response", err)
+	enc := cipher.NewEncrypter(cph, iv)
+	unencypted := make([]byte, binary.Size(data))
+	if err := binary.Write(bytes.NewBuffer(unencypted), binary.BigEndian, data); err != nil {
+		glog.V(3).Infoln("fail to marshal data", err)
 		return err
 	}
 
@@ -136,11 +184,11 @@ func (ln *TCPListener) send(tcpConn net.Conn, res *response) error {
 	copy(iv, packet)
 
 	if _, err := tcpConn.Write(packet); err != nil {
-		glog.V(3).Infoln("fail to write response to c", err)
+		glog.V(3).Infoln("fail to write data through connection", err)
 		return err
 	}
 
-	glog.V(3).Infoln("reponse send", res)
+	glog.V(3).Infoln("data send", data)
 	return nil
 }
 
