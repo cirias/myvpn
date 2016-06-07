@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"cipher"
+	"net"
 
 	"errors"
 )
@@ -36,7 +37,12 @@ type response struct {
 }
 
 type Conn interface {
-	ReadPacket(b []byte) (int, error)
+	net.Conn
+	ReadIPPacket(b []byte) (int, error)
+	IPNetMask() net.IPMask
+	LocalIPAddr() net.IP
+	RemoteIPAddr() net.IP
+	ExternalRemoteIPAddr() net.IP
 }
 
 type Listener interface {

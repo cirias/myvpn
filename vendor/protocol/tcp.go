@@ -65,7 +65,10 @@ func DialTCP(secret, remoteAddr string) (conn *TCPConn, err error) {
 	}
 
 	// Initialize conn
-	conn = &TCPConn{}
+	conn = &TCPConn{
+		localAddr: res.IP[:],
+		ipNetMask: res.IPMask[:],
+	}
 	conn.Conn = c
 	conn.cipher, err = cipher.NewCipher(key)
 	return
@@ -97,8 +100,12 @@ type TCPListener struct {
 	secret     [cipher.KeySize]byte
 }
 
+func (ln *TCPListener) Accept() (Conn, error) {
+	return ln.AcceptTCP()
+}
+
 // Currently one client acceping will block all other clients' request
-func (ln *TCPListener) Accept() (conn *TCPConn, err error) {
+func (ln *TCPListener) AcceptTCP() (conn *TCPConn, err error) {
 	var c net.Conn
 	for {
 		c, err = ln.Listener.Accept()
@@ -118,11 +125,13 @@ func (ln *TCPListener) Accept() (conn *TCPConn, err error) {
 			continue
 		}
 
-		conn = &TCPConn{}
 		ip, err := ln.ipAddrPool.Get()
 		if err != nil {
 			send(ln.cipher, c, response{Status: StatusNoIPAddrAvaliable})
 			continue
+		}
+		conn = &TCPConn{
+			remoteAddr: ip.IP.To4(),
 		}
 
 		conn.cipher, err = cipher.NewCipher(req.Key[:])
@@ -155,8 +164,8 @@ func recieve(cph *cipher.Cipher, tcpConn net.Conn, data interface{}) (err error)
 		glog.V(3).Infoln("fail to read encrypted data", err)
 		return
 	}
-	decrypted := make([]byte, binary.Size(encrypted))
-	dec.Decrypt(encrypted, decrypted)
+	decrypted := make([]byte, len(encrypted))
+	dec.Decrypt(decrypted, encrypted)
 	if err = binary.Read(bytes.NewBuffer(decrypted), binary.BigEndian, data); err != nil {
 		glog.V(3).Infoln("fail to unmarshal data", err)
 		return
@@ -173,15 +182,16 @@ func send(cph *cipher.Cipher, tcpConn net.Conn, data interface{}) error {
 	}
 
 	enc := cipher.NewEncrypter(cph, iv)
-	unencypted := make([]byte, binary.Size(data))
-	if err := binary.Write(bytes.NewBuffer(unencypted), binary.BigEndian, data); err != nil {
+	buf := &bytes.Buffer{}
+	if err := binary.Write(buf, binary.BigEndian, data); err != nil {
 		glog.V(3).Infoln("fail to marshal data", err)
 		return err
 	}
+	unencypted := buf.Bytes()
 
 	packet := make([]byte, len(iv)+len(unencypted))
-	enc.Encrypt(unencypted, packet[len(iv):])
-	copy(iv, packet)
+	copy(packet, iv)
+	enc.Encrypt(packet[len(iv):], unencypted)
 
 	if _, err := tcpConn.Write(packet); err != nil {
 		glog.V(3).Infoln("fail to write data through connection", err)
@@ -194,17 +204,20 @@ func send(cph *cipher.Cipher, tcpConn net.Conn, data interface{}) error {
 
 type TCPConn struct {
 	net.Conn
-	cipher *cipher.Cipher
+	cipher     *cipher.Cipher
+	localAddr  net.IP
+	remoteAddr net.IP
+	ipNetMask  net.IPMask
 }
 
-func (conn *TCPConn) ReadPacket(b []byte) (n int, err error) {
+func (conn *TCPConn) ReadIPPacket(b []byte) (n int, err error) {
 	ivheader := make([]byte, cipher.IVSize+IPHeaderSize)
 	if _, err = io.ReadFull(conn, ivheader); err != nil {
 		glog.V(3).Infoln("fail to read iv and encrypted header", err)
 		return
 	}
 	dec := cipher.NewDecrypter(conn.cipher, ivheader[:cipher.IVSize])
-	dec.Decrypt(ivheader[cipher.IVSize:], b[:IPHeaderSize])
+	dec.Decrypt(b[:IPHeaderSize], ivheader[cipher.IVSize:])
 
 	n = int(binary.BigEndian.Uint16(b[2:4]))
 	payload := make([]byte, n-IPHeaderSize)
@@ -212,7 +225,44 @@ func (conn *TCPConn) ReadPacket(b []byte) (n int, err error) {
 		glog.V(3).Infoln("fail to read encrypted payload", err)
 		return
 	}
-	dec.Decrypt(payload, b[IPHeaderSize:n])
+	dec.Decrypt(b[IPHeaderSize:n], payload)
 
 	return
+}
+
+func (conn *TCPConn) Write(b []byte) (int, error) {
+	iv, err := cipher.NewIV()
+	if err != nil {
+		glog.V(3).Infoln("fail to create iv", err)
+		return 0, err
+	}
+
+	enc := cipher.NewEncrypter(conn.cipher, iv)
+	encrypted := make([]byte, len(iv)+len(b))
+	copy(encrypted, iv)
+	enc.Encrypt(encrypted[len(iv):], b)
+
+	if _, err := conn.Conn.Write(encrypted); err != nil {
+		glog.V(3).Infoln("fail to write data through connection", err)
+		return 0, err
+	}
+
+	glog.V(3).Infoln("data writed", encrypted)
+	return len(encrypted), nil
+}
+
+func (conn *TCPConn) IPNetMask() net.IPMask {
+	return conn.ipNetMask
+}
+
+func (conn *TCPConn) LocalIPAddr() net.IP {
+	return conn.localAddr
+}
+
+func (conn *TCPConn) RemoteIPAddr() net.IP {
+	return conn.remoteAddr
+}
+
+func (conn *TCPConn) ExternalRemoteIPAddr() net.IP {
+	return conn.RemoteAddr().(*net.TCPAddr).IP
 }

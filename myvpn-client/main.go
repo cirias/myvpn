@@ -13,6 +13,19 @@ import (
 	"github.com/golang/glog"
 )
 
+func dial(network, secret, serverAddr string) (conn protocol.Conn, err error) {
+	switch network {
+	case "udp":
+		err = errors.New("UDP has not been implement")
+	case "tcp":
+		conn, err = protocol.DialTCP(secret, serverAddr)
+	default:
+		err = errors.New("unknown protocol")
+	}
+
+	return
+}
+
 func main() {
 	var network, secret, serverAddr, upScript, downScript string
 
@@ -23,24 +36,24 @@ func main() {
 	flag.StringVar(&downScript, "down-script", "./if-down.sh", "down shell script file path")
 	flag.Parse()
 
-	conn, err := protocol.Dial(network, secret, serverAddr)
+	conn, err := dial(network, secret, serverAddr)
 	if err != nil {
 		glog.Fatalln(err)
 	}
 	defer conn.Close()
-	glog.Infoln("connected to server", conn.IP())
+	glog.Infoln("connected to server", conn.LocalIPAddr())
 
-	tun, err := tun.NewTUN("", &conn.IPNet.IP, &conn.IPNet.Mask)
+	tun, err := tun.NewTUN("", conn.LocalIPAddr(), conn.IPNetMask())
 	if err != nil {
 		glog.Fatalln(err)
 	}
 	defer tun.Close()
 
-	err = tun.Up(upScript, conn.IP().String())
+	err = tun.Up(upScript, conn.ExternalRemoteIPAddr().String())
 	if err != nil {
 		glog.Fatalln(err)
 	}
-	defer tun.Down(downScript, conn.IP().String())
+	defer tun.Down(downScript, conn.ExternalRemoteIPAddr().String())
 	glog.Infoln(tun.Name(), "is ready")
 
 	errc := make(chan error)
@@ -48,19 +61,20 @@ func main() {
 	go func() {
 		b := make([]byte, 65535)
 		for {
-			n, err := conn.Read(b)
+			n, err := conn.ReadIPPacket(b)
 			if err != nil {
 				glog.Errorln("fail to read from connection", err)
 				errc <- err
 				continue
 			}
-			glog.V(3).Infoln("read from connection", b[:n])
+			glog.V(3).Infoln("recieve IP packet from connection", b[:n])
 
 			_, err = tun.Write(b[:n])
 			if err != nil {
 				glog.Errorln("fail to write to tun", err)
 				errc <- err
 			}
+			glog.V(3).Infoln("send IP packet to tun", b[:n])
 		}
 	}()
 	glog.Infoln("start processing data from connection")
@@ -68,19 +82,20 @@ func main() {
 	go func() {
 		b := make([]byte, 65535)
 		for {
-			n, err := tun.Read(b)
+			n, err := tun.ReadIPPacket(b)
 			if err != nil {
 				glog.Errorln("fail to read from tun", err)
 				errc <- err
 				continue
 			}
-			glog.V(3).Infoln("read from tun", b[:n])
+			glog.V(3).Infoln("recieve IP packet from tun", b[:n])
 
 			_, err = conn.Write(b[:n])
 			if err != nil {
 				glog.Errorln("fail to write to connection", err)
 				errc <- err
 			}
+			glog.V(3).Infoln("send IP packet to connection", b[:n])
 		}
 	}()
 	glog.Infoln("start processing data from tun")
