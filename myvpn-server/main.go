@@ -14,6 +14,20 @@ import (
 	"github.com/golang/glog"
 )
 
+func listen(network, secret, listenAddr string, ip net.IP, ipNet *net.IPNet) (ln protocol.Listener, err error) {
+	switch network {
+	case "udp":
+		// ln, err = protocol.ListenUDP(secret, listenAddr, ip, ipNet)
+		err = errors.New("UDP has not been implement")
+	case "tcp":
+		ln, err = protocol.ListenTCP(secret, listenAddr, ip, ipNet)
+	default:
+		err = errors.New("unknown protocol")
+	}
+
+	return
+}
+
 func main() {
 	var network, secret, listenAddr, ipnet, upScript, downScript string
 
@@ -29,13 +43,13 @@ func main() {
 	if err != nil {
 		glog.Fatalln(err)
 	}
-	ln, err := protocol.Listen(network, secret, listenAddr, ip, ipNet)
+	ln, err := listen(network, secret, listenAddr, ip, ipNet)
 	if err != nil {
 		glog.Fatalln(err)
 	}
 	glog.Infoln("start listening")
 
-	tun, err := tun.NewTUN("", &ip, &ipNet.Mask)
+	tun, err := tun.NewTUN("", ip, ipNet.Mask)
 	if err != nil {
 		glog.Fatalln(err)
 	}

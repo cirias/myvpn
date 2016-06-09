@@ -14,11 +14,11 @@ const (
 type Interface struct {
 	file   *os.File
 	name   string
-	ip     *net.IP
-	ipmask *net.IPMask
+	ip     net.IP
+	ipmask net.IPMask
 }
 
-func NewTUN(ifName string, ip *net.IP, ipmask *net.IPMask) (ifce *Interface, err error) {
+func NewTUN(ifName string, ip net.IP, ipmask net.IPMask) (ifce *Interface, err error) {
 	ifce, err = newTUN(ifName)
 	if err != nil {
 		return
@@ -33,11 +33,11 @@ func (ifce *Interface) Name() string {
 	return ifce.name
 }
 
-func (ifce *Interface) IP() *net.IP {
+func (ifce *Interface) IP() net.IP {
 	return ifce.ip
 }
 
-func (ifce *Interface) IPMask() *net.IPMask {
+func (ifce *Interface) IPMask() net.IPMask {
 	return ifce.ipmask
 }
 
@@ -49,6 +49,20 @@ func (ifce *Interface) Write(p []byte) (n int, err error) {
 func (ifce *Interface) Read(p []byte) (n int, err error) {
 	n, err = ifce.file.Read(p)
 	return
+}
+
+func (ifce *Interface) ReadIPPacket(p []byte) (n int, err error) {
+	for {
+		n, err = ifce.file.Read(p)
+		if err != nil {
+			return
+		}
+
+		// only keep ipv4 packet
+		if (p[0] >> 4) == 0x04 {
+			return
+		}
+	}
 }
 
 func (ifce *Interface) Close() (err error) {
@@ -63,9 +77,9 @@ func execScript(path string, args ...string) (err error) {
 }
 
 func (ifce *Interface) Up(path string, args ...string) error {
-	return execScript(path, append([]string{ifce.name, (&net.IPNet{*ifce.ip, *ifce.ipmask}).String()}, args...)...)
+	return execScript(path, append([]string{ifce.name, (&net.IPNet{ifce.ip, ifce.ipmask}).String()}, args...)...)
 }
 
 func (ifce *Interface) Down(path string, args ...string) error {
-	return execScript(path, append([]string{ifce.name, (&net.IPNet{*ifce.ip, *ifce.ipmask}).String()}, args...)...)
+	return execScript(path, append([]string{ifce.name, (&net.IPNet{ifce.ip, ifce.ipmask}).String()}, args...)...)
 }
