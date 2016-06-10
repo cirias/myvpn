@@ -3,9 +3,11 @@ package main
 import (
 	"errors"
 	"flag"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"protocol"
 	"tun"
@@ -27,13 +29,14 @@ func dial(network, secret, serverAddr string) (conn protocol.Conn, err error) {
 }
 
 func main() {
-	var network, secret, serverAddr, upScript, downScript string
+	var network, secret, serverAddr, upScript, downScript, addrScript string
 
 	flag.StringVar(&network, "network", "udp", "network of transport layer")
 	flag.StringVar(&secret, "secret", "", "secret")
 	flag.StringVar(&serverAddr, "server-addr", "127.0.0.1:9525", "server address")
 	flag.StringVar(&upScript, "up-script", "./if-up.sh", "up shell script file path")
 	flag.StringVar(&downScript, "down-script", "./if-down.sh", "down shell script file path")
+	flag.StringVar(&addrScript, "addr-script", "./if-addr.sh", "script file path for set ip address")
 	flag.Parse()
 
 	conn, err := dial(network, secret, serverAddr)
@@ -43,17 +46,21 @@ func main() {
 	defer conn.Close()
 	glog.Infoln("connected to server", conn.LocalIPAddr())
 
-	tun, err := tun.NewTUN("", conn.LocalIPAddr(), conn.IPNetMask())
+	tun, err := tun.NewTUN("")
 	if err != nil {
 		glog.Fatalln(err)
 	}
 	defer tun.Close()
 
-	err = tun.Up(upScript, conn.ExternalRemoteIPAddr().String())
+	err = tun.Run(addrScript, (&net.IPNet{conn.LocalIPAddr(), conn.IPNetMask()}).String())
 	if err != nil {
 		glog.Fatalln(err)
 	}
-	defer tun.Down(downScript, conn.ExternalRemoteIPAddr().String())
+	err = tun.Run(upScript, conn.ExternalRemoteIPAddr().String())
+	if err != nil {
+		glog.Fatalln(err)
+	}
+	defer tun.Run(downScript, (&net.IPNet{conn.LocalIPAddr(), conn.IPNetMask()}).String(), conn.ExternalRemoteIPAddr().String())
 	glog.Infoln(tun.Name(), "is ready")
 
 	errc := make(chan error)
@@ -61,12 +68,37 @@ func main() {
 	go func() {
 		b := make([]byte, 65535)
 		for {
-			n, err := conn.ReadIPPacket(b)
-			if err != nil {
-				glog.Errorln("fail to read from connection", err)
-				errc <- err
-				continue
+			var n int
+
+			for {
+				n, err = conn.ReadIPPacket(b)
+				if err == nil {
+					break
+				}
+				conn.Close()
+
+				for {
+					conn, err = dial(network, secret, serverAddr)
+					if err != nil {
+						time.Sleep(10 * time.Second)
+						continue
+					}
+					err = tun.Run(addrScript, (&net.IPNet{conn.LocalIPAddr(), conn.IPNetMask()}).String())
+					if err != nil {
+						glog.Warningln(err)
+					}
+					break
+				}
 			}
+
+			/*
+			 * n, err := conn.ReadIPPacket(b)
+			 * if err != nil {
+			 *   glog.Errorln("fail to read from connection", err)
+			 *   errc <- err
+			 *   continue
+			 * }
+			 */
 			glog.V(3).Infoln("recieve IP packet from connection", b[:n])
 
 			_, err = tun.Write(b[:n])
@@ -90,11 +122,19 @@ func main() {
 			}
 			glog.V(3).Infoln("recieve IP packet from tun", b[:n])
 
-			_, err = conn.Write(b[:n])
-			if err != nil {
-				glog.Errorln("fail to write to connection", err)
-				errc <- err
+			for {
+				_, err = conn.Write(b[:n])
+				if err == nil {
+					break
+				}
+				time.Sleep(10 * time.Second)
 			}
+			/*
+			 * if err != nil {
+			 *   glog.Errorln("fail to write to connection", err)
+			 *   errc <- err
+			 * }
+			 */
 			glog.V(3).Infoln("send IP packet to connection", b[:n])
 		}
 	}()

@@ -132,6 +132,7 @@ func (ln *TCPListener) AcceptTCP() (conn *TCPConn, err error) {
 		}
 		conn = &TCPConn{
 			remoteAddr: ip.IP.To4(),
+			listener:   ln,
 		}
 
 		conn.cipher, err = cipher.NewCipher(req.Key[:])
@@ -208,6 +209,7 @@ type TCPConn struct {
 	localAddr  net.IP
 	remoteAddr net.IP
 	ipNetMask  net.IPMask
+	listener   *TCPListener
 }
 
 func (conn *TCPConn) ReadIPPacket(b []byte) (n int, err error) {
@@ -230,7 +232,13 @@ func (conn *TCPConn) ReadIPPacket(b []byte) (n int, err error) {
 	return
 }
 
-func (conn *TCPConn) Write(b []byte) (int, error) {
+func (conn *TCPConn) Write(b []byte) (n int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			glog.Warningln(r)
+			err = r.(error)
+		}
+	}()
 	iv, err := cipher.NewIV()
 	if err != nil {
 		glog.V(3).Infoln("fail to create iv", err)
@@ -265,4 +273,11 @@ func (conn *TCPConn) RemoteIPAddr() net.IP {
 
 func (conn *TCPConn) ExternalRemoteIPAddr() net.IP {
 	return conn.RemoteAddr().(*net.TCPAddr).IP
+}
+
+func (conn *TCPConn) Close() error {
+	if conn.listener != nil {
+		conn.listener.ipAddrPool.Put(&net.IPNet{conn.remoteAddr, conn.ipNetMask})
+	}
+	return conn.Conn.Close()
 }

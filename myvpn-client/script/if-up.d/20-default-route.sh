@@ -1,7 +1,6 @@
 #!/bin/bash
 
 IF="$1"
-LocalIP="$2"
-ServerIP="$3"
+ServerIP="$2"
 
 ip route add $(ip route get $ServerIP | head -n1)
