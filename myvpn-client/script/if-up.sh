@@ -4,8 +4,7 @@
 # Arg Name
 
 IF="$1"
-LocalIP="$2"
-ServerIP="$3"
+ServerIP="$2"
 
 # SETUP FUNCTIONS
 ip_addr() {
@@ -19,8 +18,6 @@ ip_link() {
 }
 
 # MAIN()
-
-ip_addr "$IF" "$LocalIP"
 
 ip_link "$IF"
 

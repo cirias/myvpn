@@ -49,17 +49,17 @@ func main() {
 	}
 	glog.Infoln("start listening")
 
-	tun, err := tun.NewTUN("", ip, ipNet.Mask)
+	tun, err := tun.NewTUN("")
 	if err != nil {
 		glog.Fatalln(err)
 	}
 	defer tun.Close()
 
-	err = tun.Up(upScript, listenAddr)
+	err = tun.Run(upScript, (&net.IPNet{ip, ipNet.Mask}).String(), listenAddr)
 	if err != nil {
 		glog.Fatalln(err)
 	}
-	defer tun.Down(downScript, listenAddr)
+	defer tun.Run(downScript, (&net.IPNet{ip, ipNet.Mask}).String(), listenAddr)
 	glog.Infoln(tun.Name(), " is ready")
 
 	s := NewServer(tun, ipNet)
