@@ -20,6 +20,12 @@ func DialTCP(secret, remoteAddr string) (conn *TCPConn, err error) {
 		return
 	}
 
+	// in case idle connection session being cleaned by NAT server
+	if err = c.(*net.TCPConn).SetKeepAlive(true); err != nil {
+		glog.Errorln("fail to set keep alive", err)
+		return
+	}
+
 	cph, err := cipher.NewCipher([]byte(secret))
 	if err != nil {
 		return
@@ -112,6 +118,12 @@ func (ln *TCPListener) AcceptTCP() (conn *TCPConn, err error) {
 		if err != nil {
 			glog.Errorln("fail to accept from listener", err)
 			return conn, err
+		}
+
+		// in case idle connection session being cleaned by NAT server
+		if err = c.(*net.TCPConn).SetKeepAlive(true); err != nil {
+			glog.Errorln("fail to set keep alive", err)
+			return
 		}
 
 		req := request{}
