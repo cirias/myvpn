@@ -1,136 +1,104 @@
 package protocol
 
 import (
-	"errors"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"io"
 	"net"
-	"sync"
+
+	"cipher"
+
+	"github.com/golang/glog"
 )
 
-type state int
-
-const (
-	stateConnecting = iota
-	stateEstablished
-	stateReconnecting
-	stateDisconnecting
-)
-
-type tcpClient struct {
-	net.Conn
-	stateCh   chan state
-	writeCh   chan []byte
-	readCh    chan []byte
-	stopCh    chan struct{}
-	stoppedCh chan struct{}
+type tcpClientConn struct {
+	*TCPConn
+	psk       string
+	pskCipher *cipher.Cipher
+	localAddr net.IP
+	ipNetMask net.IPMask
 }
 
-func (c *tcpClient) handle() {
-	c.stoppedCh = make(chan struct{})
-	defer close(c.stoppedCh)
+func newTCPClientConn(c *net.TCPConn, psk string) (conn *tcpClientConn, err error) {
+	conn = &tcpClientConn{}
+	conn.TCPConn, err = newTCPConn(c)
+	conn.psk = psk
+	return
+}
 
-	for state := range c.stateCh {
-		switch state {
-		case stateConnecting:
-			c.connect()
-		case stateEstablished:
-			c.readWrite()
-		case stateReconnecting:
-			c.reconnect()
-		case stateDisconnecting:
-			c.disconnect()
-		default:
-			panic(errors.New("unknown state"))
-		}
+func (c *tcpClientConn) connect() (err error) {
+	glog.Infoln("-1")
+	key := make([]byte, cipher.KeySize)
+	if _, err = io.ReadFull(rand.Reader, key); err != nil {
+		glog.Errorln("fail to create key", err)
+		return
 	}
+
+	req := ConnectionRequest{
+		PSK: sha256.Sum256([]byte(c.psk)),
+	}
+	copy(req.Key[:], key)
+
+	pskCipher, err := cipher.NewCipher([]byte(c.psk))
+	if err != nil {
+		glog.Errorln("fail to new cipher", err)
+		return
+	}
+	packet := &Packet{
+		Header: &Header{
+			Type:   TypeConnectionRequest,
+			Length: uint16(binary.Size(req)),
+		},
+		Body: &req,
+	}
+
+	if err = send(pskCipher, c.Conn, packet); err != nil {
+		glog.Errorln("fail to send request", err)
+		return
+	}
+
+	packet = &Packet{
+		Header: &Header{},
+	}
+	if err = recieve(pskCipher, c.Conn, packet); err != nil {
+		glog.Error("fail to recieve response", err)
+		return
+	}
+	res := packet.Body.(*ConnectionResponse)
+
+	switch res.Status {
+	case StatusOK:
+	case StatusUnknowErr:
+		fallthrough
+	case StatusInvalidSecret:
+		err = ErrInvalidSecret
+		return
+	case StatusInvalidProto:
+		err = ErrInvalidProto
+		return
+	case StatusNoIPAddrAvaliable:
+		err = ErrNoIPAddrAvaliable
+		return
+	default:
+		err = ErrUnknowErr
+		return
+	}
+
+	c.localAddr = res.IP[:]
+	c.ipNetMask = res.IPMask[:]
+	c.cipher, err = cipher.NewCipher(key)
+	return nil
 }
 
-func (c *tcpClient) Close() {
-	// stopping client
-	close(c.stopCh)
-
-	<-c.stoppedCh
-	close(c.stateCh)
-	close(c.writeCh)
-	close(c.readCh)
+func (conn *tcpClientConn) IPNetMask() net.IPMask {
+	return conn.ipNetMask
 }
 
-func (c *tcpClient) Read(b []byte) (int, error) {
-	return 0, nil
+func (conn *tcpClientConn) LocalIPAddr() net.IP {
+	return conn.localAddr
 }
 
-func (c *tcpClient) Write(b []byte) (int, error) {
-	return 0, nil
-}
-
-func (c *tcpClient) connect() {
-}
-
-func (c *tcpClient) readWrite() {
-	errorCh := make(chan error)
-	defer close(errorCh)
-	stopReadCh := make(chan struct{})
-	stopWriteCh := make(chan struct{})
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		var b []byte
-		for {
-			select {
-			case <-c.stopCh:
-				return
-			case b = <-c.writeCh:
-			}
-
-			if _, err := c.Conn.Write(b); err != nil {
-				errorCh <- err
-				// TODO
-			}
-		}
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		var b []byte
-		for {
-			select {
-			case <-c.stopCh:
-				return
-			default:
-			}
-
-			n, err := c.Conn.Read(b)
-			if err != nil {
-				errorCh <- err
-				// TODO
-			}
-			c.readCh <- b[:n]
-		}
-	}()
-
-	go func() {
-		select {
-		case <-c.stopCh:
-			go func() { c.stateCh <- stateDisconnecting }()
-		case <-errorCh:
-			go func() { c.stateCh <- stateReconnecting }()
-		}
-
-		close(stopReadCh)
-		close(stopWriteCh)
-	}()
-
-	// wait until read and write goroutine return
-	wg.Wait()
-}
-
-func (c *tcpClient) reconnect() {
-
-}
-
-func (c *tcpClient) disconnect() {
-
+func (conn *tcpClientConn) ExternalRemoteIPAddr() net.IP {
+	return conn.RemoteAddr().(*net.TCPAddr).IP
 }

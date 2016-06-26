@@ -47,6 +47,7 @@ func main() {
 	if err != nil {
 		glog.Fatalln(err)
 	}
+	defer ln.Close()
 	glog.Infoln("start listening")
 
 	tun, err := tun.NewTUN("")
