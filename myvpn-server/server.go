@@ -36,7 +36,7 @@ func NewServer(t *tun.Interface, n *net.IPNet) (s *Server) {
 			default:
 			}
 
-			n, err := t.ReadIPPacket(b)
+			n, err := t.Read(b)
 			if err != nil {
 				if err == io.EOF {
 					return
@@ -49,6 +49,7 @@ func NewServer(t *tun.Interface, n *net.IPNet) (s *Server) {
 			dst.IP = b[16:20]
 			if c := s.clients[dst.String()]; c != nil {
 				glog.V(1).Infoln("write to", dst)
+				// TODO one reconnecting client will block all other clients
 				_, err := c.Write(b[:n])
 				if err != nil {
 					glog.Errorln("fail to write to", dst, err)
@@ -63,10 +64,10 @@ func NewServer(t *tun.Interface, n *net.IPNet) (s *Server) {
 	return
 }
 
-func (s *Server) Handle(conn protocol.Conn) {
+func (s *Server) Handle(conn protocol.ServerConn) {
 	c := &Client{
-		Conn: conn,
-		quit: make(chan struct{}),
+		ServerConn: conn,
+		quit:       make(chan struct{}),
 	}
 	defer c.Close()
 	defer glog.Infoln("client quit", c.RemoteIPAddr())
@@ -89,7 +90,7 @@ func (s *Server) Handle(conn protocol.Conn) {
 		default:
 		}
 
-		n, err := c.ReadIPPacket(b)
+		n, err := c.Read(b)
 		if err != nil {
 			if err == io.EOF {
 				return

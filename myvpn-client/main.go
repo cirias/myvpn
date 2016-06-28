@@ -15,7 +15,7 @@ import (
 	"github.com/golang/glog"
 )
 
-func dial(network, secret, serverAddr string) (conn protocol.Conn, err error) {
+func dial(network, secret, serverAddr string) (conn protocol.ClientConn, err error) {
 	switch network {
 	case "udp":
 		err = errors.New("UDP has not been implement")
@@ -71,7 +71,7 @@ func main() {
 			var n int
 
 			for {
-				n, err = conn.ReadIPPacket(b)
+				n, err = conn.Read(b)
 				if err == nil {
 					break
 				}
@@ -80,6 +80,7 @@ func main() {
 				for {
 					conn, err = dial(network, secret, serverAddr)
 					if err != nil {
+						glog.Errorln("fail to dial", err)
 						time.Sleep(10 * time.Second)
 						continue
 					}
@@ -127,6 +128,7 @@ func main() {
 				if err == nil {
 					break
 				}
+				glog.Errorln("fail to write", err)
 				time.Sleep(10 * time.Second)
 			}
 			/*

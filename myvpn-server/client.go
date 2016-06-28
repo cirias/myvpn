@@ -5,6 +5,6 @@ import (
 )
 
 type Client struct {
-	protocol.Conn
+	protocol.ServerConn
 	quit chan struct{}
 }

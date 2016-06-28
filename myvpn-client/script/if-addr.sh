@@ -6,6 +6,8 @@
 IF="$1"
 LocalIP="$2"
 
+echo "bringup $IF $LocalIP"
+
 # SETUP FUNCTIONS
 ip_addr() {
   ip addr flush dev "$1"
