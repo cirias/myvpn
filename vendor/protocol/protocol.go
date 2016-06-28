@@ -32,17 +32,11 @@ type request struct {
 
 type response struct {
 	Status byte
-	IP     [4]byte
-	IPMask [4]byte
 }
 
 type Conn interface {
 	net.Conn
 	ReadIPPacket(b []byte) (int, error)
-	IPNetMask() net.IPMask
-	LocalIPAddr() net.IP
-	RemoteIPAddr() net.IP
-	ExternalRemoteIPAddr() net.IP
 }
 
 type Listener interface {

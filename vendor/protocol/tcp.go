@@ -13,6 +13,11 @@ import (
 	"github.com/golang/glog"
 )
 
+type TCPConn struct {
+	net.Conn
+	cipher *cipher.Cipher
+}
+
 func DialTCP(secret, remoteAddr string) (conn *TCPConn, err error) {
 	c, err := net.Dial("tcp", remoteAddr)
 	if err != nil {
@@ -72,15 +77,13 @@ func DialTCP(secret, remoteAddr string) (conn *TCPConn, err error) {
 
 	// Initialize conn
 	conn = &TCPConn{
-		localAddr: res.IP[:],
-		ipNetMask: res.IPMask[:],
+		Conn: c,
 	}
-	conn.Conn = c
 	conn.cipher, err = cipher.NewCipher(key)
 	return
 }
 
-func ListenTCP(secret, localAddr string, internalIP net.IP, ipNet *net.IPNet) (ln *TCPListener, err error) {
+func ListenTCP(secret, localAddr string) (ln *TCPListener, err error) {
 	ln = &TCPListener{}
 	ln.Listener, err = net.Listen("tcp", localAddr)
 	if err != nil {
@@ -92,18 +95,15 @@ func ListenTCP(secret, localAddr string, internalIP net.IP, ipNet *net.IPNet) (l
 		return
 	}
 
-	ln.ipAddrPool = NewIPAddrPool(internalIP, ipNet)
 	ln.secret = sha256.Sum256([]byte(secret))
 
 	return
-
 }
 
 type TCPListener struct {
 	net.Listener
-	cipher     *cipher.Cipher
-	ipAddrPool IPAddrPool
-	secret     [cipher.KeySize]byte
+	cipher *cipher.Cipher
+	secret [cipher.KeySize]byte
 }
 
 func (ln *TCPListener) Accept() (Conn, error) {
@@ -137,14 +137,8 @@ func (ln *TCPListener) AcceptTCP() (conn *TCPConn, err error) {
 			continue
 		}
 
-		ip, err := ln.ipAddrPool.Get()
-		if err != nil {
-			send(ln.cipher, c, response{Status: StatusNoIPAddrAvaliable})
-			continue
-		}
 		conn = &TCPConn{
-			remoteAddr: ip.IP.To4(),
-			listener:   ln,
+			Conn: c,
 		}
 
 		conn.cipher, err = cipher.NewCipher(req.Key[:])
@@ -155,11 +149,7 @@ func (ln *TCPListener) AcceptTCP() (conn *TCPConn, err error) {
 		res := response{
 			Status: StatusOK,
 		}
-		copy(res.IP[:], ip.IP.To4())
-		copy(res.IPMask[:], ip.Mask)
 		send(ln.cipher, c, &res)
-
-		conn.Conn = c
 
 		return conn, err
 	}
@@ -215,15 +205,6 @@ func send(cph *cipher.Cipher, tcpConn net.Conn, data interface{}) error {
 	return nil
 }
 
-type TCPConn struct {
-	net.Conn
-	cipher     *cipher.Cipher
-	localAddr  net.IP
-	remoteAddr net.IP
-	ipNetMask  net.IPMask
-	listener   *TCPListener
-}
-
 func (conn *TCPConn) ReadIPPacket(b []byte) (n int, err error) {
 	ivheader := make([]byte, cipher.IVSize+IPHeaderSize)
 	if _, err = io.ReadFull(conn, ivheader); err != nil {
@@ -271,25 +252,10 @@ func (conn *TCPConn) Write(b []byte) (n int, err error) {
 	return len(encrypted), nil
 }
 
-func (conn *TCPConn) IPNetMask() net.IPMask {
-	return conn.ipNetMask
-}
-
-func (conn *TCPConn) LocalIPAddr() net.IP {
-	return conn.localAddr
-}
-
-func (conn *TCPConn) RemoteIPAddr() net.IP {
-	return conn.remoteAddr
-}
-
 func (conn *TCPConn) ExternalRemoteIPAddr() net.IP {
 	return conn.RemoteAddr().(*net.TCPAddr).IP
 }
 
 func (conn *TCPConn) Close() error {
-	if conn.listener != nil {
-		conn.listener.ipAddrPool.Put(&net.IPNet{conn.remoteAddr, conn.ipNetMask})
-	}
 	return conn.Conn.Close()
 }
