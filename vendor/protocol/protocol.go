@@ -13,17 +13,11 @@ const (
 
 const (
 	StatusOK byte = iota
-	StatusUnknowErr
 	StatusInvalidSecret
-	StatusInvalidProto
-	StatusNoIPAddrAvaliable
 )
 
 var ErrUnknowErr = errors.New("Unknow error")
 var ErrInvalidSecret = errors.New("Invalid secret")
-var ErrInvalidProto = errors.New("Invalid proto")
-var ErrNoIPAddrAvaliable = errors.New("No IPAddr avaliable")
-var ErrIPAddrPoolFull = errors.New("IPAddrPool is full")
 
 type request struct {
 	Secret [cipher.KeySize]byte

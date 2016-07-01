@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"reflect"
 
 	"cipher"
 
@@ -16,6 +17,47 @@ import (
 type TCPConn struct {
 	net.Conn
 	cipher *cipher.Cipher
+}
+
+func newTCPConn(c net.Conn, key []byte) (conn *TCPConn, err error) {
+	conn = &TCPConn{
+		Conn: c,
+	}
+	conn.cipher, err = cipher.NewCipher(key)
+	return
+}
+
+func newRequest(key string) (*request, error) {
+	req := &request{}
+	nextkey := make([]byte, cipher.KeySize)
+	if _, err := io.ReadFull(rand.Reader, nextkey); err != nil {
+		return nil, err
+	}
+
+	req.Secret = sha256.Sum256([]byte(key))
+	copy(req.Key[:], nextkey)
+	return req, nil
+}
+
+func handleResponse(res *response) (err error) {
+	switch res.Status {
+	case StatusOK:
+	case StatusInvalidSecret:
+		err = ErrInvalidSecret
+	default:
+		err = ErrUnknowErr
+	}
+	return
+}
+
+func (ln *TCPListener) handleRequest(req *request) *response {
+	res := &response{}
+	if req.Secret == ln.secret {
+		res.Status = StatusOK
+	} else {
+		res.Status = StatusInvalidSecret
+	}
+	return res
 }
 
 func DialTCP(secret, remoteAddr string) (conn *TCPConn, err error) {
@@ -33,53 +75,30 @@ func DialTCP(secret, remoteAddr string) (conn *TCPConn, err error) {
 
 	cph, err := cipher.NewCipher([]byte(secret))
 	if err != nil {
+		return nil, err
+	}
+
+	req, err := newRequest(secret)
+	if err != nil {
 		return
 	}
 
-	key := make([]byte, cipher.KeySize)
-	if _, err = io.ReadFull(rand.Reader, key); err != nil {
-		return
-	}
-
-	req := request{
-		Secret: sha256.Sum256([]byte(secret)),
-	}
-	copy(req.Key[:], key)
-
-	if err = send(cph, c, &req); err != nil {
+	if err = send(cph, c, req); err != nil {
 		glog.Error("fail to send request", err)
 		return
 	}
 
-	res := response{}
-	if err = recieve(cph, c, &res); err != nil {
+	res := &response{}
+	if err = recieve(cph, c, res); err != nil {
 		glog.Error("fail to recieve response", err)
 		return
 	}
 
-	switch res.Status {
-	case StatusOK:
-	case StatusUnknowErr:
-		fallthrough
-	case StatusInvalidSecret:
-		err = ErrInvalidSecret
-		return
-	case StatusInvalidProto:
-		err = ErrInvalidProto
-		return
-	case StatusNoIPAddrAvaliable:
-		err = ErrNoIPAddrAvaliable
-		return
-	default:
-		err = ErrUnknowErr
+	if err = handleResponse(res); err != nil {
 		return
 	}
 
-	// Initialize conn
-	conn = &TCPConn{
-		Conn: c,
-	}
-	conn.cipher, err = cipher.NewCipher(key)
+	conn, err = newTCPConn(c, req.Key[:])
 	return
 }
 
@@ -126,130 +145,28 @@ func (ln *TCPListener) AcceptTCP() (conn *TCPConn, err error) {
 			return
 		}
 
-		req := request{}
-		if err := recieve(ln.cipher, c, &req); err != nil {
+		req := &request{}
+		if err := recieve(ln.cipher, c, req); err != nil {
 			glog.Errorln("fail to recieve request", err)
 			continue
 		}
 
-		if req.Secret != ln.secret {
-			send(ln.cipher, c, response{Status: StatusInvalidSecret})
-			continue
+		res := ln.handleRequest(req)
+		if err = send(ln.cipher, c, res); err != nil {
+			return nil, err
 		}
 
-		conn = &TCPConn{
-			Conn: c,
-		}
-
-		conn.cipher, err = cipher.NewCipher(req.Key[:])
-		if err != nil {
-			return conn, err
-		}
-
-		res := response{
-			Status: StatusOK,
-		}
-		send(ln.cipher, c, &res)
-
+		conn, err = newTCPConn(c, req.Key[:])
 		return conn, err
 	}
 }
 
-func recieve(cph *cipher.Cipher, tcpConn net.Conn, data interface{}) (err error) {
-	iv := make([]byte, cipher.IVSize)
-	if _, err = io.ReadFull(tcpConn, iv); err != nil {
-		glog.V(3).Infoln("fail to read iv", err)
-		return
-	}
-	dec := cipher.NewDecrypter(cph, iv)
-	encrypted := make([]byte, binary.Size(data))
-	if _, err = io.ReadFull(tcpConn, encrypted); err != nil {
-		glog.V(3).Infoln("fail to read encrypted data", err)
-		return
-	}
-	decrypted := make([]byte, len(encrypted))
-	dec.Decrypt(decrypted, encrypted)
-	if err = binary.Read(bytes.NewBuffer(decrypted), binary.BigEndian, data); err != nil {
-		glog.V(3).Infoln("fail to unmarshal data", err)
-		return
-	}
-	glog.V(3).Infoln("data recieved", data)
-	return
-}
-
-func send(cph *cipher.Cipher, tcpConn net.Conn, data interface{}) error {
-	iv, err := cipher.NewIV()
-	if err != nil {
-		glog.V(3).Infoln("fail to create iv", err)
-		return err
-	}
-
-	enc := cipher.NewEncrypter(cph, iv)
-	buf := &bytes.Buffer{}
-	if err := binary.Write(buf, binary.BigEndian, data); err != nil {
-		glog.V(3).Infoln("fail to marshal data", err)
-		return err
-	}
-	unencypted := buf.Bytes()
-
-	packet := make([]byte, len(iv)+len(unencypted))
-	copy(packet, iv)
-	enc.Encrypt(packet[len(iv):], unencypted)
-
-	if _, err := tcpConn.Write(packet); err != nil {
-		glog.V(3).Infoln("fail to write data through connection", err)
-		return err
-	}
-
-	glog.V(3).Infoln("data send", data)
-	return nil
-}
-
 func (conn *TCPConn) ReadIPPacket(b []byte) (n int, err error) {
-	ivheader := make([]byte, cipher.IVSize+IPHeaderSize)
-	if _, err = io.ReadFull(conn, ivheader); err != nil {
-		glog.V(3).Infoln("fail to read iv and encrypted header", err)
-		return
-	}
-	dec := cipher.NewDecrypter(conn.cipher, ivheader[:cipher.IVSize])
-	dec.Decrypt(b[:IPHeaderSize], ivheader[cipher.IVSize:])
-
-	n = int(binary.BigEndian.Uint16(b[2:4]))
-	payload := make([]byte, n-IPHeaderSize)
-	if _, err = io.ReadFull(conn, payload); err != nil {
-		glog.V(3).Infoln("fail to read encrypted payload", err)
-		return
-	}
-	dec.Decrypt(b[IPHeaderSize:n], payload)
-
-	return
+	return read(conn.cipher, conn.Conn, b)
 }
 
 func (conn *TCPConn) Write(b []byte) (n int, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			glog.Warningln(r)
-			err = r.(error)
-		}
-	}()
-	iv, err := cipher.NewIV()
-	if err != nil {
-		glog.V(3).Infoln("fail to create iv", err)
-		return 0, err
-	}
-
-	enc := cipher.NewEncrypter(conn.cipher, iv)
-	encrypted := make([]byte, len(iv)+len(b))
-	copy(encrypted, iv)
-	enc.Encrypt(encrypted[len(iv):], b)
-
-	if _, err := conn.Conn.Write(encrypted); err != nil {
-		glog.V(3).Infoln("fail to write data through connection", err)
-		return 0, err
-	}
-
-	glog.V(3).Infoln("data writed", encrypted)
-	return len(encrypted), nil
+	return write(conn.cipher, conn.Conn, b)
 }
 
 func (conn *TCPConn) ExternalRemoteIPAddr() net.IP {
@@ -258,4 +175,139 @@ func (conn *TCPConn) ExternalRemoteIPAddr() net.IP {
 
 func (conn *TCPConn) Close() error {
 	return conn.Conn.Close()
+}
+
+func read(cph *cipher.Cipher, r io.Reader, b []byte) (n int, err error) {
+	iv := make([]byte, cipher.IVSize)
+	if _, err = io.ReadFull(r, iv); err != nil {
+		glog.Errorln("fail to read iv", err)
+		return
+	}
+
+	dec := cipher.NewDecrypter(cph, iv)
+
+	var length uint16
+	if err = decode(dec, r, &length); err != nil {
+		glog.Errorln("fail to decode length ", err)
+		return
+	}
+	n = int(length)
+
+	if err = decode(dec, r, b[:n]); err != nil {
+		glog.Errorln("fail to decode body ", err)
+		return
+	}
+
+	glog.V(3).Infoln("body recieved", b)
+	return
+}
+
+func recieve(cph *cipher.Cipher, r io.Reader, data interface{}) (err error) {
+	iv := make([]byte, cipher.IVSize)
+	if _, err = io.ReadFull(r, iv); err != nil {
+		glog.Errorln("fail to read iv", err)
+		return
+	}
+
+	dec := cipher.NewDecrypter(cph, iv)
+
+	if err = decode(dec, r, data); err != nil {
+		glog.Errorln("fail to decode body ", err)
+		return
+	}
+
+	glog.V(3).Infoln("body recieved", data)
+	return
+}
+
+func decode(dec *cipher.Decrypter, r io.Reader, data interface{}) (err error) {
+	encrypted := make([]byte, binary.Size(data))
+	if _, err = io.ReadFull(r, encrypted); err != nil {
+		return
+	}
+	t := reflect.TypeOf(data)
+	if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 { // if data's type is []byte
+		dec.Decrypt(data.([]byte), encrypted)
+	} else {
+		decrypted := make([]byte, len(encrypted))
+		dec.Decrypt(decrypted, encrypted)
+		err = binary.Read(bytes.NewBuffer(decrypted), binary.BigEndian, data)
+	}
+	return
+}
+
+func write(cph *cipher.Cipher, w io.Writer, b []byte) (n int, err error) {
+	iv, err := cipher.NewIV()
+	if err != nil {
+		glog.Errorln("fail to create iv", err)
+		return
+	}
+
+	if _, err = w.Write(iv); err != nil {
+		glog.Errorln("fail to write iv to connection", err)
+		return
+	}
+
+	length := uint16(len(b))
+
+	enc := cipher.NewEncrypter(cph, iv)
+
+	if err = encode(enc, w, length); err != nil {
+		glog.Errorln("fail to encode header to connection", err)
+		return
+	}
+
+	if err = encode(enc, w, b); err != nil {
+		glog.Errorln("fail to encode body to connection", err)
+		return
+	}
+
+	n = len(b)
+
+	glog.V(3).Infoln("body send", b)
+	return
+}
+
+func send(cph *cipher.Cipher, w io.Writer, data interface{}) error {
+	iv, err := cipher.NewIV()
+	if err != nil {
+		glog.Errorln("fail to create iv", err)
+		return err
+	}
+
+	if _, err := w.Write(iv); err != nil {
+		glog.Errorln("fail to write iv to connection", err)
+		return err
+	}
+
+	enc := cipher.NewEncrypter(cph, iv)
+
+	if err := encode(enc, w, data); err != nil {
+		glog.Errorln("fail to encode body to connection", err)
+		return err
+	}
+
+	glog.V(3).Infoln("body send", data)
+	return nil
+}
+
+func encode(enc *cipher.Encrypter, w io.Writer, data interface{}) (err error) {
+	var unencypted []byte
+	t := reflect.TypeOf(data)
+	if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 { // data's type is []byte
+		unencypted = data.([]byte)
+	} else {
+		buf := &bytes.Buffer{}
+		if err = binary.Write(buf, binary.BigEndian, data); err != nil {
+			return
+		}
+		unencypted = buf.Bytes()
+	}
+
+	encrypted := make([]byte, len(unencypted))
+	enc.Encrypt(encrypted, unencypted)
+
+	_, err = w.Write(encrypted)
+
+	return
 }
