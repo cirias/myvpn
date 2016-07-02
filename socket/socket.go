@@ -1,16 +1,10 @@
 package socket
 
 import (
+	"io"
 	"sync"
 
-	"protocol"
-)
-
-type typeState int
-
-const (
-	stateRunning = iota
-	stateStopped
+	"github.com/golang/glog"
 )
 
 type Socket struct {
@@ -37,17 +31,17 @@ func (s *Socket) stop() {
 	}
 }
 
-func (s *Socket) start(conn protocol.Conn) {
+func (s *Socket) start(conn io.ReadWriteCloser) {
 	go func() {
 		if err := s.run(conn); err != nil {
-
+			glog.Error("socket run error", err)
 		} else {
 			s.stoppedCh <- struct{}{}
 		}
 	}()
 }
 
-func (s *Socket) run(conn protocol.Conn) (err error) {
+func (s *Socket) run(conn io.ReadWriteCloser) (err error) {
 	errorCh := make(chan error)
 	stopReadCh := make(chan struct{})
 	stopWriteCh := make(chan struct{})
@@ -74,7 +68,7 @@ func (s *Socket) run(conn protocol.Conn) (err error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		var b []byte
+		b := make([]byte, 65535)
 		for {
 			select {
 			case <-stopReadCh:
@@ -100,18 +94,25 @@ func (s *Socket) run(conn protocol.Conn) (err error) {
 
 	// wait until read and write goroutine return
 	wg.Wait()
+
+	close(s.readCh)
+	close(s.writeCh)
+	conn.Close()
 	return
 }
 
 func (s *Socket) Write(b []byte) (int, error) {
+	glog.V(2).Info("write ", b)
 	s.writeCh <- b
 	return len(b), nil
 }
 
-func (s *Socket) Read(b []byte) (int, error) {
+func (s *Socket) Read(b []byte) (n int, err error) {
 	p := <-s.readCh
 	copy(b, p)
-	return len(p), nil
+	n = len(p)
+	glog.V(2).Info("read ", b[:n])
+	return
 }
 
 func (s *Socket) Close() error {

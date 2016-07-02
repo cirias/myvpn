@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"protocol"
+
+	"github.com/golang/glog"
 )
 
 type Client struct {
@@ -14,25 +16,29 @@ type Client struct {
 	id idType
 }
 
-func NewSocketClient(psk, remoteAddr string) *Client {
-	c := &Client{
+func NewClient(psk, remoteAddr string) (c *Client, err error) {
+	c = &Client{
 		Socket: NewSocket(),
+	}
+
+	if _, err = io.ReadFull(rand.Reader, c.id[:]); err != nil {
+		return
 	}
 
 	go func() {
 		for {
 			conn, err := protocol.DialTCP(psk, remoteAddr)
 			if err != nil {
+				glog.Warningf("fail to dail %s, retry...\n", err)
 				time.Sleep(10 * time.Second)
 				continue
 			}
+			glog.V(2).Info("dial connection success")
 
 			req := &request{
-				reqType: typeReqConnect,
+				Id: c.id,
 			}
-			if _, err = io.ReadFull(rand.Reader, req.id[:]); err != nil {
-				return
-			}
+			glog.V(2).Info("send request ", req)
 			if err := binary.Write(conn, binary.BigEndian, req); err != nil {
 				return
 			}
@@ -41,14 +47,15 @@ func NewSocketClient(psk, remoteAddr string) *Client {
 			if err := binary.Read(conn, binary.BigEndian, res); err != nil {
 				return
 			}
+			glog.V(2).Info("recieve response ", res)
 
-			// TODO
-
-			c.Socket.start(conn)
+			if err := c.Socket.run(conn); err != nil {
+				glog.Error("error occured during socket run", err)
+			}
 
 			break
 		}
 	}()
 
-	return c
+	return
 }
