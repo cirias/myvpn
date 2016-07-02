@@ -161,7 +161,7 @@ func (ln *TCPListener) AcceptTCP() (conn *TCPConn, err error) {
 	}
 }
 
-func (conn *TCPConn) ReadIPPacket(b []byte) (n int, err error) {
+func (conn *TCPConn) Read(b []byte) (n int, err error) {
 	return read(conn.cipher, conn.Conn, b)
 }
 
@@ -198,7 +198,7 @@ func read(cph *cipher.Cipher, r io.Reader, b []byte) (n int, err error) {
 		return
 	}
 
-	glog.V(3).Infoln("body recieved", b)
+	glog.V(3).Infoln("body recieved", b[:n])
 	return
 }
 

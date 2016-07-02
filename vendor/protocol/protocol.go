@@ -30,7 +30,6 @@ type response struct {
 
 type Conn interface {
 	net.Conn
-	ReadIPPacket(b []byte) (int, error)
 }
 
 type Listener interface {
