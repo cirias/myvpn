@@ -13,12 +13,14 @@ import (
 
 type Client struct {
 	*Socket
-	id idType
+	id   idType
+	quit chan struct{}
 }
 
 func NewClient(psk, remoteAddr string) (c *Client, err error) {
 	c = &Client{
 		Socket: NewSocket(),
+		quit:   make(chan struct{}),
 	}
 
 	if _, err = io.ReadFull(rand.Reader, c.id[:]); err != nil {
@@ -27,6 +29,12 @@ func NewClient(psk, remoteAddr string) (c *Client, err error) {
 
 	go func() {
 		for {
+			select {
+			case <-c.quit:
+				break
+			default:
+			}
+
 			conn, err := protocol.DialTCP(psk, remoteAddr)
 			if err != nil {
 				glog.Warningf("fail to dail %s, retry...\n", err)
@@ -58,4 +66,9 @@ func NewClient(psk, remoteAddr string) (c *Client, err error) {
 	}()
 
 	return
+}
+
+func (c *Client) Close() error {
+	close(c.quit)
+	return c.Socket.Close()
 }
