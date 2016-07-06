@@ -33,12 +33,14 @@ func (ifce *Interface) Write(p []byte) (n int, err error) {
 	return
 }
 
-func (ifce *Interface) Read(p []byte) (n int, err error) {
-	n, err = ifce.file.Read(p)
-	return
-}
+/*
+ * func (ifce *Interface) Read(p []byte) (n int, err error) {
+ *   n, err = ifce.file.Read(p)
+ *   return
+ * }
+ */
 
-func (ifce *Interface) ReadIPPacket(p []byte) (n int, err error) {
+func (ifce *Interface) Read(p []byte) (n int, err error) {
 	for {
 		n, err = ifce.file.Read(p)
 		if err != nil {

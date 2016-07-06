@@ -9,8 +9,7 @@ import (
 	"net"
 	"reflect"
 
-	"cipher"
-
+	"github.com/cirias/myvpn/cipher"
 	"github.com/golang/glog"
 )
 

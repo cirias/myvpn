@@ -4,8 +4,7 @@ import (
 	"encoding/binary"
 	"sync"
 
-	"protocol"
-
+	"github.com/cirias/myvpn/protocol"
 	"github.com/golang/glog"
 )
 

@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"cipher"
+	"github.com/cirias/myvpn/cipher"
 )
 
 func TestSendRecieve(t *testing.T) {

@@ -1,10 +1,10 @@
 package protocol
 
 import (
-	"cipher"
+	"errors"
 	"net"
 
-	"errors"
+	"github.com/cirias/myvpn/cipher"
 )
 
 const (

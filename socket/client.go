@@ -6,8 +6,7 @@ import (
 	"io"
 	"time"
 
-	"protocol"
-
+	"github.com/cirias/myvpn/protocol"
 	"github.com/golang/glog"
 )
 
