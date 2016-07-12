@@ -83,13 +83,13 @@ func DialTCP(secret, remoteAddr string) (conn *TCPConn, err error) {
 	}
 
 	if err = send(cph, c, req); err != nil {
-		glog.Error("fail to send request", err)
+		glog.Errorln("fail to send request", err)
 		return
 	}
 
 	res := &response{}
 	if err = recieve(cph, c, res); err != nil {
-		glog.Error("fail to recieve response", err)
+		glog.Errorln("fail to recieve response", err)
 		return
 	}
 
@@ -166,10 +166,6 @@ func (conn *TCPConn) Read(b []byte) (n int, err error) {
 
 func (conn *TCPConn) Write(b []byte) (n int, err error) {
 	return write(conn.cipher, conn.Conn, b)
-}
-
-func (conn *TCPConn) ExternalRemoteIPAddr() net.IP {
-	return conn.RemoteAddr().(*net.TCPAddr).IP
 }
 
 func (conn *TCPConn) Close() error {

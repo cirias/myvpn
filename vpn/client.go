@@ -24,7 +24,7 @@ func NewClient(ifce, conn io.ReadWriter) (c *Client, err error) {
 
 	res := &response{}
 	if err = binary.Read(conn, binary.BigEndian, res); err != nil {
-		glog.Error("fail to read response ", err)
+		glog.Errorln("fail to read response", err)
 		return
 	}
 
@@ -43,6 +43,12 @@ func NewClient(ifce, conn io.ReadWriter) (c *Client, err error) {
 		IP:     res.IP[:],
 		IPMask: res.IPMask[:],
 	}
+
+	go func() {
+		if err := c.ReadWrite(); err != nil {
+			glog.Errorln("vpn client error", err)
+		}
+	}()
 
 	return
 }
@@ -74,14 +80,14 @@ func (c *Client) ReadWrite() (err error) {
 				errCh <- err
 				continue
 			}
-			glog.V(3).Infoln("recieve IP packet from connection", b[:n])
+			glog.V(1).Infoln("recieve IP packet from connection", b[:n])
 
 			_, err = c.ifce.Write(b[:n])
 			if err != nil {
 				glog.Errorln("fail to write to ifce", err)
 				errCh <- err
 			}
-			glog.V(3).Infoln("send IP packet to ifce", b[:n])
+			glog.V(1).Infoln("send IP packet to ifce", b[:n])
 		}
 	}()
 	glog.Infoln("start processing data from connection")
@@ -103,19 +109,19 @@ func (c *Client) ReadWrite() (err error) {
 				errCh <- err
 				continue
 			}
-			glog.V(3).Infoln("recieve IP packet from ifce", b[:n])
+			glog.V(1).Infoln("recieve IP packet from ifce", b[:n])
 
 			_, err = c.conn.Write(b[:n])
 			if err != nil {
 				glog.Errorln("fail to write to connection", err)
 				errCh <- err
 			}
-			glog.V(3).Infoln("send IP packet to connection", b[:n])
+			glog.V(1).Infoln("send IP packet to connection", b[:n])
 		}
 	}()
 	glog.Infoln("start processing data from ifce")
 
-	// TODO error hanle
+	// TODO error handle
 
 	wg.Wait()
 

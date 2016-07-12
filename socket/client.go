@@ -34,18 +34,19 @@ func NewClient(psk, remoteAddr string) (c *Client, err error) {
 			default:
 			}
 
+			glog.V(2).Infoln("start dial connection")
 			conn, err := protocol.DialTCP(psk, remoteAddr)
 			if err != nil {
 				glog.Warningf("fail to dail %s, retry...\n", err)
 				time.Sleep(10 * time.Second)
 				continue
 			}
-			glog.V(2).Info("dial connection success")
+			glog.V(2).Infoln("dial connection success")
 
 			req := &request{
 				Id: c.id,
 			}
-			glog.V(2).Info("send request ", req)
+			glog.V(2).Infoln("send request", req)
 			if err := binary.Write(conn, binary.BigEndian, req); err != nil {
 				return
 			}
@@ -54,13 +55,12 @@ func NewClient(psk, remoteAddr string) (c *Client, err error) {
 			if err := binary.Read(conn, binary.BigEndian, res); err != nil {
 				return
 			}
-			glog.V(2).Info("recieve response ", res)
+			glog.V(2).Infoln("recieve response", res)
 
 			if err := c.Socket.run(conn); err != nil {
 				glog.Error("error occured during socket run", err)
+				continue
 			}
-
-			break
 		}
 	}()
 

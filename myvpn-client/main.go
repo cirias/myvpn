@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/cirias/myvpn/socket"
@@ -48,13 +49,18 @@ func main() {
 	if err != nil {
 		glog.Fatalln(err)
 	}
-	/*
-	 * err = tun.Run(upScript, conn.ExternalRemoteIPAddr().String())
-	 * if err != nil {
-	 *   glog.Fatalln(err)
-	 * }
-	 * defer tun.Run(downScript, (&net.IPNet{conn.LocalIPAddr(), conn.IPNetMask()}).String(), conn.ExternalRemoteIPAddr().String())
-	 */
+
+	ips, err := net.LookupIP(strings.Split(serverAddr, ":")[0])
+	if err != nil {
+		glog.Fatalln(err)
+	}
+	glog.Infoln("server ip: ", ips)
+	err = tun.Run(upScript, ips[0].String())
+	if err != nil {
+		glog.Fatalln(err)
+	}
+	defer tun.Run(downScript, (&net.IPNet{client.IP, client.IPMask}).String(), ips[0].String())
+
 	glog.Infoln(tun.Name(), "is ready")
 
 	signalCh := make(chan os.Signal)
@@ -63,7 +69,7 @@ func main() {
 	}()
 
 	sgn := <-signalCh
-	glog.Info("process quit", sgn)
+	glog.Infoln("process quit", sgn)
 
 	return
 }

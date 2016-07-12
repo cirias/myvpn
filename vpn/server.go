@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/golang/glog"
 )
@@ -62,7 +63,7 @@ func NewServer(ifce io.ReadWriter, ipnet string) (s *Server, err error) {
 				glog.Errorln("fail to read from tun", err)
 				continue
 			}
-			glog.V(3).Infoln("recieve IP packet from tun", b[:n])
+			glog.V(1).Infoln("recieve IP packet from tun", b[:n])
 
 			dst.IP = b[16:20]
 			if c := s.clients[dst.String()]; c != nil {
@@ -70,8 +71,9 @@ func NewServer(ifce io.ReadWriter, ipnet string) (s *Server, err error) {
 				_, err := c.Write(b[:n])
 				if err != nil {
 					glog.Errorln("fail to write to", dst, err)
+					continue
 				}
-				glog.V(3).Infoln("send IP packet to connection", b[:n])
+				glog.V(1).Infoln("send IP packet to connection", b[:n])
 			} else {
 				glog.Warningln("Unknown distination", dst)
 			}
@@ -116,8 +118,16 @@ func (s *Server) Handle(conn io.ReadWriter) error {
 	default:
 	}
 
-	if err := binary.Write(c, binary.BigEndian, res); err != nil {
-		glog.Error("fail to write response to client ", err)
+	// wait until socket is ready
+	for i := 0; i < 3; i++ {
+		if err = binary.Write(c, binary.BigEndian, res); err != nil {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		break
+	}
+	if err != nil {
+		glog.Errorln("fail to write response to client", err)
 		return err
 	}
 
@@ -126,12 +136,11 @@ func (s *Server) Handle(conn io.ReadWriter) error {
 	}
 
 	c.ipAddr = &net.IPAddr{}
-	glog.Infoln("ip.IP ", ip.IP)
 	c.ipAddr.IP = make(net.IP, len(ip.IP))
 	copy(c.ipAddr.IP, ip.IP)
-	defer glog.Infoln("client quit ", c.ipAddr)
+	defer glog.Infoln("client quit", c.ipAddr)
 
-	glog.Infoln("client join ", c.ipAddr.IP)
+	glog.Infoln("client join", c.ipAddr.IP)
 	s.rwm.Lock()
 	s.clients[c.ipAddr.String()] = c
 	s.rwm.Unlock()
@@ -158,12 +167,12 @@ func (s *Server) Handle(conn io.ReadWriter) error {
 			glog.Errorln("fail to read from client", c.ipAddr, err)
 			continue
 		}
-		glog.V(3).Infoln("recieve IP packet from connection", b[:n])
+		glog.V(1).Infoln("recieve IP packet from connection", b[:n])
 
 		if _, err = s.ifce.Write(b[:n]); err != nil {
 			glog.Errorln("fail to write to tun", err)
 		}
-		glog.V(3).Infoln("send IP packet to tun", b[:n])
+		glog.V(1).Infoln("send IP packet to tun", b[:n])
 	}
 }
 
@@ -183,8 +192,4 @@ type clientHandle struct {
 	io.ReadWriter
 	ipAddr *net.IPAddr
 	quit   chan struct{}
-}
-
-func (c *clientHandle) reading() {
-
 }

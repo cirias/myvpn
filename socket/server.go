@@ -43,7 +43,7 @@ func (s *Server) Accept() (*Socket, error) {
 		if err := binary.Read(conn, binary.BigEndian, req); err != nil {
 			return nil, err
 		}
-		glog.V(2).Info("recieve request ", req)
+		glog.V(2).Infoln("recieve request", req)
 
 		socket, err := s.handleConnect(conn, req)
 		if err != nil {
@@ -72,7 +72,7 @@ func (s *Server) handleConnect(conn protocol.Conn, req *request) (*Socket, error
 		socket.start(conn)
 	}
 	res.Status = statusOk
-	glog.V(2).Info("send response ", res)
+	glog.V(2).Infoln("send response", res)
 	err := binary.Write(conn, binary.BigEndian, res)
 	return socket, err
 }

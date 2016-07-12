@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"errors"
 	"io"
 	"sync"
 
@@ -34,7 +35,7 @@ func (s *Socket) stop() {
 func (s *Socket) start(conn io.ReadWriteCloser) {
 	go func() {
 		if err := s.run(conn); err != nil {
-			glog.Error("socket run error", err)
+			glog.Errorln("error occured during socket run", err)
 		} else {
 			s.stoppedCh <- struct{}{}
 		}
@@ -61,6 +62,7 @@ func (s *Socket) run(conn io.ReadWriteCloser) (err error) {
 
 			if _, err := conn.Write(b); err != nil {
 				errorCh <- err
+				break
 			}
 		}
 	}()
@@ -79,6 +81,7 @@ func (s *Socket) run(conn io.ReadWriteCloser) (err error) {
 			n, err := conn.Read(b)
 			if err != nil {
 				errorCh <- err
+				break
 			}
 			s.readCh <- b[:n]
 		}
@@ -86,6 +89,7 @@ func (s *Socket) run(conn io.ReadWriteCloser) (err error) {
 
 	select {
 	case err = <-errorCh:
+		glog.Errorln("socket run error ", err)
 	case <-s.stopCh:
 	}
 
@@ -95,23 +99,25 @@ func (s *Socket) run(conn io.ReadWriteCloser) (err error) {
 	// wait until read and write goroutine return
 	wg.Wait()
 
-	close(s.readCh)
-	close(s.writeCh)
 	conn.Close()
 	return
 }
 
 func (s *Socket) Write(b []byte) (int, error) {
-	glog.V(2).Info("write ", b)
-	s.writeCh <- b
-	return len(b), nil
+	glog.V(2).Infoln("write", b)
+	select {
+	case s.writeCh <- b:
+		return len(b), nil
+	default:
+		return 0, errors.New("socket stopped")
+	}
 }
 
 func (s *Socket) Read(b []byte) (n int, err error) {
 	p := <-s.readCh
 	copy(b, p)
 	n = len(p)
-	glog.V(2).Info("read ", b[:n])
+	glog.V(2).Infoln("read", b[:n])
 	return
 }
 

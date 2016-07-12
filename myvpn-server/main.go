@@ -72,7 +72,7 @@ func main() {
 	glog.Infoln("waiting client")
 
 	sgn := <-signalCh
-	glog.Info("process quit", sgn)
+	glog.Infoln("process quit", sgn)
 
 	return
 }
