@@ -9,7 +9,7 @@ import (
 )
 
 type Server struct {
-	clients  map[idType]*Socket
+	clients  map[id]*Socket
 	listener protocol.Listener
 	rwm      sync.RWMutex
 }
@@ -21,7 +21,7 @@ func NewServer(psk, localAddr string) (*Server, error) {
 	}
 
 	s := &Server{
-		clients:  make(map[idType]*Socket),
+		clients:  make(map[id]*Socket),
 		listener: ln,
 	}
 

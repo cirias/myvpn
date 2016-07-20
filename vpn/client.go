@@ -62,6 +62,7 @@ func (c *Client) Close() error {
 func (c *Client) ReadWrite() (err error) {
 	var wg sync.WaitGroup
 	errCh := make(chan error)
+	defer close(errCh)
 
 	wg.Add(1)
 	go func() {
@@ -122,6 +123,11 @@ func (c *Client) ReadWrite() (err error) {
 	glog.Infoln("start processing data from ifce")
 
 	// TODO error handle
+	go func() {
+		for err := range errCh {
+			glog.Errorln(err)
+		}
+	}()
 
 	wg.Wait()
 

@@ -12,7 +12,7 @@ import (
 
 type Client struct {
 	*Socket
-	id   idType
+	id   id
 	quit chan struct{}
 }
 

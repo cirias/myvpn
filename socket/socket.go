@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/golang/glog"
 )
@@ -105,10 +106,11 @@ func (s *Socket) run(conn io.ReadWriteCloser) (err error) {
 
 func (s *Socket) Write(b []byte) (int, error) {
 	glog.V(2).Infoln("write", b)
+	t := time.NewTimer(time.Microsecond)
 	select {
 	case s.writeCh <- b:
 		return len(b), nil
-	default:
+	case <-t.C:
 		return 0, errors.New("socket stopped")
 	}
 }

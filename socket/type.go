@@ -1,9 +1,9 @@
 package socket
 
-type idType [8]byte
+type id [8]byte
 
 type request struct {
-	Id idType
+	Id id
 }
 
 const (
