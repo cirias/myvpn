@@ -1,11 +1,12 @@
 package vpn
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
 	"net"
-	"sync"
+	"time"
 
 	"github.com/golang/glog"
 )
@@ -20,13 +21,22 @@ type Client struct {
 	IPMask net.IPMask
 }
 
-func NewClient(ifce, conn io.ReadWriter) (c *Client, err error) {
+type InOuter interface {
+	In() chan<- []byte
+	Out() <-chan []byte
+	InErr() <-chan error
+	OutErr() <-chan error
+}
 
+func NewClient(ifce, conn InOuter) (c *Client, err error) {
+	glog.Infoln("00000000000")
+	r := bytes.NewBuffer(<-conn.Out())
 	res := &response{}
-	if err = binary.Read(conn, binary.BigEndian, res); err != nil {
+	if err = binary.Read(r, binary.BigEndian, res); err != nil {
 		glog.Errorln("fail to read response", err)
 		return
 	}
+	glog.V(1).Infoln("res", res)
 
 	switch res.Status {
 	case statusOk:
@@ -36,102 +46,88 @@ func NewClient(ifce, conn io.ReadWriter) (c *Client, err error) {
 		return nil, ErrUnknownStatus
 	}
 
+	go func() {
+		var b []byte
+		t := time.NewTimer(0)
+		for {
+			t.Reset(10 * time.Second)
+		CONN_OUT_LOOP:
+			for {
+				select {
+				case <-c.stop:
+					return
+				case b = <-conn.Out():
+					glog.V(1).Infoln("b = <-conn.Out()")
+					break CONN_OUT_LOOP
+				case <-t.C:
+					glog.V(1).Infoln("conn.Out() timeout")
+					t.Reset(time.Second)
+				}
+			}
+
+			select {
+			case <-c.stop:
+				return
+			case ifce.In() <- b:
+				glog.V(1).Infoln("b -> ifce.In()")
+			}
+		}
+	}()
+
+	go func() {
+		var b []byte
+		t := time.NewTimer(0)
+		for {
+			select {
+			case <-c.stop:
+				return
+			case b = <-ifce.Out():
+				glog.V(1).Infoln("b = <-ifce.Out()")
+			}
+
+			t.Reset(10 * time.Second)
+		CONN_IN_LOOP:
+			for {
+				select {
+				case <-c.stop:
+					return
+				case conn.In() <- b:
+					glog.V(1).Infoln("conn.In() <- b")
+					break CONN_IN_LOOP
+				case <-t.C:
+					glog.V(1).Infoln("conn.In() is not avaliable")
+					t.Reset(time.Second)
+				}
+			}
+		}
+	}()
+
+	go func() {
+		var err error
+		for {
+			select {
+			case <-c.stop:
+				break
+			case err = <-ifce.InErr():
+			case err = <-ifce.OutErr():
+			}
+			glog.Errorln("vpn client error", err)
+		}
+	}()
+
 	c = &Client{
-		ifce:   ifce,
-		conn:   conn,
 		stop:   make(chan struct{}),
 		IP:     res.IP[:],
 		IPMask: res.IPMask[:],
 	}
-
-	go func() {
-		if err := c.ReadWrite(); err != nil {
-			glog.Errorln("vpn client error", err)
-		}
-	}()
 
 	return
 }
 
 func (c *Client) Close() error {
 	glog.Infoln("client closing")
-	close(c.stop)
+	c.stop <- struct{}{}
+	c.stop <- struct{}{}
+	c.stop <- struct{}{}
 	return nil
-}
-
-func (c *Client) ReadWrite() (err error) {
-	var wg sync.WaitGroup
-	errCh := make(chan error)
-	defer close(errCh)
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		b := make([]byte, 65535)
-		for {
-			select {
-			case <-c.stop:
-				return
-			default:
-			}
-
-			n, err := c.conn.Read(b)
-			if err != nil {
-				glog.Errorln("fail to read from connection", err)
-				errCh <- err
-				continue
-			}
-			glog.V(1).Infoln("recieve IP packet from connection", b[:n])
-
-			_, err = c.ifce.Write(b[:n])
-			if err != nil {
-				glog.Errorln("fail to write to ifce", err)
-				errCh <- err
-			}
-			glog.V(1).Infoln("send IP packet to ifce", b[:n])
-		}
-	}()
-	glog.Infoln("start processing data from connection")
-
-	wg.Add(1)
-	go func() {
-		wg.Done()
-		b := make([]byte, 65535)
-		for {
-			select {
-			case <-c.stop:
-				return
-			default:
-			}
-
-			n, err := c.ifce.Read(b)
-			if err != nil {
-				glog.Errorln("fail to read from ifce", err)
-				errCh <- err
-				continue
-			}
-			glog.V(1).Infoln("recieve IP packet from ifce", b[:n])
-
-			_, err = c.conn.Write(b[:n])
-			if err != nil {
-				glog.Errorln("fail to write to connection", err)
-				errCh <- err
-			}
-			glog.V(1).Infoln("send IP packet to connection", b[:n])
-		}
-	}()
-	glog.Infoln("start processing data from ifce")
-
-	// TODO error handle
-	go func() {
-		for err := range errCh {
-			glog.Errorln(err)
-		}
-	}()
-
-	wg.Wait()
-
-	glog.Infoln("stopped")
-
-	return
 }

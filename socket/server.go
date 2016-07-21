@@ -1,78 +1,100 @@
 package socket
 
 import (
+	"bytes"
+	"crypto/rand"
 	"encoding/binary"
+	"io"
 	"sync"
 
-	"github.com/cirias/myvpn/protocol"
+	"github.com/cirias/myvpn/cipher"
+	"github.com/cirias/myvpn/encrypted"
+	"github.com/cirias/myvpn/tcp"
 	"github.com/golang/glog"
 )
 
 type Server struct {
-	clients  map[id]*Socket
-	listener protocol.Listener
-	rwm      sync.RWMutex
+	*tcp.Server
+	clients map[id]*encrypted.Conn
+	rwm     sync.RWMutex
+	psk     string
 }
 
 func NewServer(psk, localAddr string) (*Server, error) {
-	ln, err := protocol.ListenTCP(psk, localAddr)
+	s, err := tcp.NewServer(localAddr)
 	if err != nil {
 		return nil, err
 	}
 
-	s := &Server{
-		clients:  make(map[id]*Socket),
-		listener: ln,
+	server := &Server{
+		Server:  s,
+		clients: make(map[id]*encrypted.Conn),
+		psk:     psk,
 	}
 
-	return s, nil
+	return server, nil
 }
 
-func (s Server) Close() error {
-	return s.listener.Close()
-}
-
-func (s *Server) Accept() (*Socket, error) {
+func (s *Server) Accept() (*encrypted.Conn, error) {
 	for {
-		conn, err := s.listener.Accept()
+		tcpConn, err := s.Server.Accept()
 		if err != nil {
 			return nil, err
 		}
 
+		cph, err := cipher.NewCipher([]byte(s.psk))
+		if err != nil {
+			return nil, err
+		}
+		conn := encrypted.NewConn(cph, tcpConn)
+
+		r := bytes.NewBuffer(<-conn.OutCh)
 		req := &request{}
-		if err := binary.Read(conn, binary.BigEndian, req); err != nil {
+		if err := binary.Read(r, binary.BigEndian, req); err != nil {
 			return nil, err
 		}
 		glog.V(2).Infoln("recieve request", req)
 
-		socket, err := s.handleConnect(conn, req)
-		if err != nil {
+		if err := s.handleConnect(conn, req); err != nil {
 			return nil, err
 		}
 
-		if socket != nil {
-			return socket, nil
-		}
+		return conn, nil
 	}
 }
 
-func (s *Server) handleConnect(conn protocol.Conn, req *request) (*Socket, error) {
+func (s *Server) handleConnect(conn *encrypted.Conn, req *request) error {
 	res := &response{}
-	s.rwm.RLock()
-	socket, exist := s.clients[req.Id]
-	s.rwm.RUnlock()
-	if exist {
-		socket.stop()
-		socket.start(conn)
-	} else {
-		socket = NewSocket()
-		s.rwm.Lock()
-		s.clients[req.Id] = socket
-		s.rwm.Unlock()
-		socket.start(conn)
+	if req.Id.IsEmpty() {
+		glog.V(2).Infoln("client id is empty")
+		if _, err := io.ReadFull(rand.Reader, res.Id[:]); err != nil {
+			return err
+		}
 	}
-	res.Status = statusOk
+
+	s.register(res.Id, conn)
+
+	res.Status = statusOK
 	glog.V(2).Infoln("send response", res)
-	err := binary.Write(conn, binary.BigEndian, res)
-	return socket, err
+	w := &bytes.Buffer{}
+	if err := binary.Write(w, binary.BigEndian, res); err != nil {
+		return err
+	}
+	conn.InCh <- w.Bytes()
+
+	return nil
+}
+
+func (s *Server) register(i id, conn *encrypted.Conn) {
+	s.rwm.RLock()
+	c, exist := s.clients[i]
+	s.rwm.RUnlock()
+
+	if exist {
+		c.Close()
+	}
+
+	s.rwm.Lock()
+	s.clients[i] = conn
+	s.rwm.Unlock()
 }

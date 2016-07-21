@@ -25,11 +25,11 @@ func main() {
 	flag.StringVar(&addrScript, "addr-script", "./if-addr.sh", "script file path for set ip address")
 	flag.Parse()
 
-	sock, err := socket.NewClient(secret, serverAddr)
+	conn, err := socket.NewClient(secret, serverAddr)
 	if err != nil {
 		glog.Fatalln(err)
 	}
-	defer sock.Close()
+	defer conn.Close()
 
 	tun, err := tun.NewTUN("")
 	if err != nil {
@@ -37,7 +37,7 @@ func main() {
 	}
 	defer tun.Close()
 
-	client, err := vpn.NewClient(tun, sock)
+	client, err := vpn.NewClient(tun, conn)
 	if err != nil {
 		glog.Fatalln(err)
 	}

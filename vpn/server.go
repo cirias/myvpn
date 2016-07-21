@@ -1,8 +1,8 @@
 package vpn
 
 import (
+	"bytes"
 	"encoding/binary"
-	"io"
 	"net"
 	"sync"
 	"time"
@@ -14,11 +14,11 @@ type Server struct {
 	rwm     sync.RWMutex
 	clients map[string]*clientHandle
 	ipPool  IPAddrPool
-	ifce    io.ReadWriter
+	ifce    InOuter
 	quit    chan struct{}
 }
 
-func NewServer(ifce io.ReadWriter, ipnet string) (s *Server, err error) {
+func NewServer(ifce InOuter, ipnet string) (s *Server, err error) {
 	ip, ipNet, err := net.ParseCIDR(ipnet)
 	if err != nil {
 		return
@@ -31,21 +31,7 @@ func NewServer(ifce io.ReadWriter, ipnet string) (s *Server, err error) {
 		quit:    make(chan struct{}),
 	}
 
-	/*
-	 *   readCh := make(chan []byte)
-	 *   go func() {
-	 *     b := make([]byte, 65535)
-	 *     for {
-	 *       n, err := ifce.Read(b)
-	 *       if err != nil {
-	 *
-	 *       }
-	 *     }
-	 *   }()
-	 */
-
 	go func() {
-		b := make([]byte, 65535)
 		dst := &net.IPAddr{}
 
 		for {
@@ -55,28 +41,32 @@ func NewServer(ifce io.ReadWriter, ipnet string) (s *Server, err error) {
 			default:
 			}
 
-			n, err := ifce.Read(b)
-			if err != nil {
-				if err == io.EOF {
-					return
-				}
-				glog.Errorln("fail to read from tun", err)
-				continue
-			}
-			glog.V(1).Infoln("recieve IP packet from tun", b[:n])
+			b := <-ifce.Out()
+			glog.V(1).Infoln("recieve IP packet from tun", b)
 
 			dst.IP = b[16:20]
 			if c := s.clients[dst.String()]; c != nil {
 				glog.V(1).Infoln("write to", dst)
-				_, err := c.Write(b[:n])
-				if err != nil {
-					glog.Errorln("fail to write to", dst, err)
-					continue
+				select {
+				case c.In() <- b:
+				default:
 				}
-				glog.V(1).Infoln("send IP packet to connection", b[:n])
 			} else {
 				glog.Warningln("Unknown distination", dst)
 			}
+		}
+	}()
+
+	go func() {
+		var err error
+		for {
+			select {
+			case <-s.quit:
+				break
+			case err = <-ifce.InErr():
+			case err = <-ifce.OutErr():
+			}
+			glog.Errorln("interface error", err)
 		}
 	}()
 
@@ -94,10 +84,10 @@ type response struct {
 	IPMask [4]byte
 }
 
-func (s *Server) Handle(conn io.ReadWriter) error {
+func (s *Server) Handle(conn InOuter) error {
 	c := &clientHandle{
-		ReadWriter: conn,
-		quit:       make(chan struct{}),
+		InOuter: conn,
+		quit:    make(chan struct{}),
 	}
 
 	res := &response{}
@@ -118,18 +108,12 @@ func (s *Server) Handle(conn io.ReadWriter) error {
 	default:
 	}
 
-	// wait until socket is ready
-	for i := 0; i < 3; i++ {
-		if err = binary.Write(c, binary.BigEndian, res); err != nil {
-			time.Sleep(time.Millisecond)
-			continue
-		}
-		break
-	}
-	if err != nil {
-		glog.Errorln("fail to write response to client", err)
+	w := &bytes.Buffer{}
+	glog.V(1).Infoln("res", res)
+	if err = binary.Write(w, binary.BigEndian, res); err != nil {
 		return err
 	}
+	conn.In() <- w.Bytes()
 
 	if res.Status != statusOk {
 		return ErrUnknownStatus
@@ -150,35 +134,40 @@ func (s *Server) Handle(conn io.ReadWriter) error {
 		s.rwm.Unlock()
 	}()
 
-	b := make([]byte, 65535)
-
 	for {
-		select {
-		case <-c.quit:
-			return nil
-		default:
-		}
-
-		n, err := c.Read(b)
-		if err != nil {
-			if err == io.EOF {
-				return nil
+		var b []byte
+		t := time.NewTimer(0)
+		for {
+			t.Reset(10 * time.Second)
+		CONN_OUT_LOOP:
+			for {
+				select {
+				case <-c.quit:
+					return nil
+				case b = <-c.Out():
+					glog.V(1).Infoln("b = <-c.Out()")
+					break CONN_OUT_LOOP
+				case <-t.C:
+					glog.V(1).Infoln("c.Out() timeout")
+					t.Reset(time.Second)
+				}
 			}
-			glog.Errorln("fail to read from client", c.ipAddr, err)
-			continue
-		}
-		glog.V(1).Infoln("recieve IP packet from connection", b[:n])
 
-		if _, err = s.ifce.Write(b[:n]); err != nil {
-			glog.Errorln("fail to write to tun", err)
+			select {
+			case <-c.quit:
+				return nil
+			case s.ifce.In() <- b:
+				glog.V(1).Infoln("b -> ifce.In()")
+				glog.V(1).Infoln("send to tun")
+			}
 		}
-		glog.V(1).Infoln("send IP packet to tun", b[:n])
 	}
 }
 
 func (s *Server) Close() {
 	glog.Infoln("server closing")
-	close(s.quit)
+	s.quit <- struct{}{}
+	s.quit <- struct{}{}
 
 	s.rwm.RLock()
 	for _, c := range s.clients {
@@ -189,7 +178,7 @@ func (s *Server) Close() {
 }
 
 type clientHandle struct {
-	io.ReadWriter
+	InOuter
 	ipAddr *net.IPAddr
 	quit   chan struct{}
 }

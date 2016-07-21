@@ -11,8 +11,12 @@ const (
 )
 
 type Interface struct {
-	file *os.File
-	name string
+	file     *os.File
+	name     string
+	inCh     chan []byte
+	outCh    chan []byte
+	inErrCh  chan error
+	outErrCh chan error
 }
 
 func NewTUN(ifName string) (ifce *Interface, err error) {
@@ -21,7 +25,30 @@ func NewTUN(ifName string) (ifce *Interface, err error) {
 		return
 	}
 
+	ifce.inCh = make(chan []byte)
+	ifce.outCh = make(chan []byte)
+	ifce.inErrCh = make(chan error)
+	ifce.outErrCh = make(chan error)
+
+	go ifce.reading()
+	go ifce.writing()
 	return
+}
+
+func (i *Interface) In() chan<- []byte {
+	return i.inCh
+}
+
+func (i *Interface) Out() <-chan []byte {
+	return i.outCh
+}
+
+func (i *Interface) InErr() <-chan error {
+	return i.inErrCh
+}
+
+func (i *Interface) OutErr() <-chan error {
+	return i.outErrCh
 }
 
 func (ifce *Interface) Name() string {
@@ -67,4 +94,31 @@ func execScript(path string, args ...string) (err error) {
 
 func (ifce *Interface) Run(path string, args ...string) error {
 	return execScript(path, append([]string{ifce.name}, args...)...)
+}
+
+func (i *Interface) reading() {
+	b := make([]byte, 65535)
+	for {
+		n, err := i.Read(b)
+		if err != nil {
+			select {
+			case i.outErrCh <- err:
+			default:
+			}
+		}
+
+		i.outCh <- b[:n]
+	}
+}
+
+func (i *Interface) writing() {
+	for b := range i.inCh {
+		_, err := i.Write(b)
+		if err != nil {
+			select {
+			case i.inErrCh <- err:
+			default:
+			}
+		}
+	}
 }
