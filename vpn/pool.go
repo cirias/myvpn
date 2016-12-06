@@ -1,7 +1,13 @@
-package protocol
+package vpn
 
 import (
+	"errors"
 	"net"
+)
+
+var (
+	ErrNoIPAvaliable  = errors.New("no ip address avaliable")
+	ErrIPAddrPoolFull = errors.New("ip address pool is full")
 )
 
 type IPAddrPool chan *net.IPNet
@@ -35,7 +41,7 @@ func (p IPAddrPool) Get() (ip *net.IPNet, err error) {
 	case ip = <-p:
 		return
 	default:
-		err = ErrNoIPAddrAvaliable
+		err = ErrNoIPAvaliable
 		return
 	}
 }

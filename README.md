@@ -49,7 +49,3 @@ ExecStart=/opt/myvpn-client/myvpn-client -server-addr=<serverip>:9525 -password=
 [Install]
 WantedBy=multi-user.target
 ```
-
-## TODO
-- support config file
-- dockerize
