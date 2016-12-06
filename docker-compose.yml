@@ -1,0 +1,38 @@
+version: '2'
+services:
+  client:
+    container_name: myvpn-client
+    image: myvpn-test
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./myvpn-client/myvpn-client.linux.amd64:/myvpn-client
+      - ./myvpn-client/script/if-addr.sh:/if-addr.sh
+      - ./myvpn-client/script/if-up.sh:/if-up.sh
+      - ./myvpn-client/script/if-down.sh:/if-down.sh
+    networks:
+      - net1
+    command: /myvpn-client -server-addr="myvpn-server:9525" -secret=abc -logtostderr -v=3
+  server:
+    container_name: myvpn-server
+    image: myvpn-test
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./myvpn-server/myvpn-server.linux.amd64:/myvpn-server
+      - ./myvpn-server/if-up.sh:/if-up.sh
+      - ./myvpn-server/if-down.sh:/if-down.sh
+    networks:
+      - net1
+      - net2
+    command: /myvpn-server -secret=abc -logtostderr -v=3
+  target:
+    container_name: myvpn-target
+    image: myvpn-test
+    networks:
+      - net2
+networks:
+  net1:
+    driver: bridge
+  net2:
+    driver: bridge
