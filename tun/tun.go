@@ -5,11 +5,6 @@ import (
 	"os/exec"
 )
 
-const (
-	UpHook   = "if-up.sh"
-	DownHook = "if-down.sh"
-)
-
 type Interface struct {
 	file *os.File
 	name string

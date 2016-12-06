@@ -30,16 +30,16 @@ func main() {
 	}
 	glog.Infoln("start listening")
 
-	ip, ipNet, err := net.ParseCIDR(ipnet)
-	if err != nil {
-		glog.Fatalln(err)
-	}
-
 	tun, err := tun.NewTUN("")
 	if err != nil {
 		glog.Fatalln(err)
 	}
 	defer tun.Close()
+
+	ip, ipNet, err := net.ParseCIDR(ipnet)
+	if err != nil {
+		glog.Fatalln(err)
+	}
 
 	err = tun.Run(upScript, (&net.IPNet{ip, ipNet.Mask}).String(), listenAddr)
 	if err != nil {
